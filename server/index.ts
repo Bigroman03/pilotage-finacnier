@@ -14,6 +14,7 @@ import {
   getFinancialSettings,
   listPlannedExpenses,
   mapPlannedExpense,
+  plannedAmountExcludingTax,
   rankVendors,
 } from './analytics.js';
 import { EXPENSE_CATEGORIES } from './classification.js';
@@ -35,7 +36,9 @@ const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
 const plannedExpenseSchema = z.object({
   label: z.string().trim().min(2).max(160),
   vendor: z.string().trim().min(2).max(120),
-  amountCents: z.coerce.number().int().positive().max(1_000_000_000),
+  enteredAmountCents: z.coerce.number().int().positive().max(1_000_000_000),
+  taxMode: z.enum(['ht', 'ttc', 'reverse_charge']),
+  vatRateBasisPoints: z.coerce.number().int().min(0).max(10_000),
   category: z.string().trim().min(2).max(100),
   subcategory: z.string().trim().min(2).max(100),
   kind: z.enum(['monthly', 'one_off']),
@@ -100,6 +103,54 @@ app.get('/api/vendors', (_req, res) => {
   });
 });
 
+app.get('/api/clients', (_req, res) => {
+  const rows = db.prepare(`SELECT * FROM stripe_customers
+    ORDER BY lifetime_spend_ht_cents DESC, current_mrr_ht_cents DESC, name COLLATE NOCASE`).all() as any[];
+  const offers = db.prepare(`SELECT * FROM stripe_customer_offers
+    ORDER BY monthly_mrr_ht_cents DESC, product_name COLLATE NOCASE`).all() as any[];
+  const offersByCustomer = new Map<string, any[]>();
+  for (const offer of offers) offersByCustomer.set(offer.customer_id, [...(offersByCustomer.get(offer.customer_id) || []), offer]);
+  const clients = rows.map((row, index) => ({
+    rank: index + 1,
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    currency: row.currency,
+    activeSubscriptionCount: row.active_subscription_count,
+    currentMrrHtCents: row.current_mrr_ht_cents,
+    lifetimeSpendHtCents: row.lifetime_spend_ht_cents,
+    paidInvoiceCount: row.paid_invoice_count,
+    averageInvoiceHtCents: row.paid_invoice_count ? Math.round(row.lifetime_spend_ht_cents / row.paid_invoice_count) : 0,
+    firstPaidAt: row.first_paid_at,
+    lastPaidAt: row.last_paid_at,
+    offers: (offersByCustomer.get(row.id) || []).map((offer) => ({
+      subscriptionId: offer.subscription_id,
+      priceId: offer.price_id,
+      productId: offer.product_id,
+      productName: offer.product_name,
+      interval: offer.interval,
+      intervalCount: offer.interval_count,
+      quantity: offer.quantity,
+      monthlyMrrHtCents: offer.monthly_mrr_ht_cents,
+    })),
+  }));
+  const totalMrrHtCents = clients.reduce((sum, client) => sum + client.currentMrrHtCents, 0);
+  const lifetimeSpendHtCents = clients.reduce((sum, client) => sum + client.lifetimeSpendHtCents, 0);
+  const paidInvoiceCount = clients.reduce((sum, client) => sum + client.paidInvoiceCount, 0);
+  res.json({
+    summary: {
+      activeClientCount: clients.length,
+      activeSubscriptionCount: clients.reduce((sum, client) => sum + client.activeSubscriptionCount, 0),
+      totalMrrHtCents,
+      averageMonthlyBasketHtCents: clients.length ? Math.round(totalMrrHtCents / clients.length) : 0,
+      lifetimeSpendHtCents,
+      paidInvoiceCount,
+      averageInvoiceHtCents: paidInvoiceCount ? Math.round(lifetimeSpendHtCents / paidInvoiceCount) : 0,
+    },
+    clients,
+  });
+});
+
 app.patch('/api/vendors/:vendor', (req, res) => {
   const schema = z.object({
     displayName: z.string().trim().min(2).max(120).nullable().optional(),
@@ -125,9 +176,12 @@ app.get('/api/planned-expenses', (_req, res) => res.json({ expenses: listPlanned
 app.post('/api/planned-expenses', (req, res) => {
   const value = plannedExpenseSchema.parse(req.body);
   const now = new Date().toISOString();
-  const result = db.prepare(`INSERT INTO planned_expenses(label, vendor, amount_cents, category, subcategory, kind,
-    start_date, end_date, notes, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(value.label, value.vendor, value.amountCents, value.category, value.subcategory, value.kind,
+  const amountCents = plannedAmountExcludingTax(value.enteredAmountCents, value.taxMode, value.vatRateBasisPoints);
+  const result = db.prepare(`INSERT INTO planned_expenses(label, vendor, amount_cents, entered_amount_cents, tax_mode,
+    vat_rate_basis_points, category, subcategory, kind, start_date, end_date, notes, active, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`) 
+    .run(value.label, value.vendor, amountCents, value.enteredAmountCents, value.taxMode, value.vatRateBasisPoints,
+      value.category, value.subcategory, value.kind,
       value.startDate, value.endDate || null, value.notes || null, value.active ? 1 : 0, now, now);
   const row = db.prepare('SELECT * FROM planned_expenses WHERE id = ?').get(result.lastInsertRowid) as any;
   res.status(201).json({ expense: mapPlannedExpense(row) });
@@ -136,9 +190,12 @@ app.post('/api/planned-expenses', (req, res) => {
 app.put('/api/planned-expenses/:id', (req, res) => {
   const id = z.coerce.number().int().positive().parse(req.params.id);
   const value = plannedExpenseSchema.parse(req.body);
-  const result = db.prepare(`UPDATE planned_expenses SET label=?, vendor=?, amount_cents=?, category=?, subcategory=?,
-    kind=?, start_date=?, end_date=?, notes=?, active=?, updated_at=? WHERE id=?`)
-    .run(value.label, value.vendor, value.amountCents, value.category, value.subcategory, value.kind,
+  const amountCents = plannedAmountExcludingTax(value.enteredAmountCents, value.taxMode, value.vatRateBasisPoints);
+  const result = db.prepare(`UPDATE planned_expenses SET label=?, vendor=?, amount_cents=?, entered_amount_cents=?,
+    tax_mode=?, vat_rate_basis_points=?, category=?, subcategory=?, kind=?, start_date=?, end_date=?, notes=?,
+    active=?, updated_at=? WHERE id=?`)
+    .run(value.label, value.vendor, amountCents, value.enteredAmountCents, value.taxMode, value.vatRateBasisPoints,
+      value.category, value.subcategory, value.kind,
       value.startDate, value.endDate || null, value.notes || null, value.active ? 1 : 0, new Date().toISOString(), id);
   if (!result.changes) return res.status(404).json({ error: 'Dépense introuvable.' });
   const row = db.prepare('SELECT * FROM planned_expenses WHERE id = ?').get(id) as any;

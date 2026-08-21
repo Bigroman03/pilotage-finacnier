@@ -2,19 +2,19 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNo
 import {
   Activity, ArrowUpCircle, BarChart3, Building2, CalendarRange, CheckCircle2,
   ChevronRight, CircleDollarSign, Database, Gauge, Landmark, LayoutDashboard, Loader2, PiggyBank,
-  Plus, RefreshCw, Scale, Search, Settings2, ShoppingCart, Timer, Trash2, TrendingDown,
-  Trophy, WalletCards, XCircle,
+  Pencil, Plus, RefreshCw, Scale, Search, Settings2, ShoppingCart, Timer, Trash2, TrendingDown,
+  Trophy, Users, WalletCards, XCircle,
 } from 'lucide-react';
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import type {
-  DashboardResponse, ExpenseHierarchy, FinancialKpiResponse, ForecastMonth, PlannedExpense,
+  ClientsResponse, DashboardResponse, ExpenseHierarchy, FinancialKpiResponse, ForecastMonth, PlannedExpense,
   RecurringVendor, VendorRanking,
 } from '../shared/types';
 import { api, formatDate, formatEUR } from './api';
 
-type Tab = 'dashboard' | 'expenses' | 'vendors' | 'forecast' | 'kpis' | 'connections';
+type Tab = 'dashboard' | 'expenses' | 'vendors' | 'clients' | 'forecast' | 'kpis' | 'connections';
 
 type ExpensesResponse = { totalCents: number; transactionCount: number; hierarchy: ExpenseHierarchy[] };
 type VendorsResponse = {
@@ -38,6 +38,7 @@ const tabs: Array<{ id: Tab; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'dashboard', label: 'Vue d’ensemble', icon: LayoutDashboard },
   { id: 'expenses', label: 'Toutes les dépenses', icon: ShoppingCart },
   { id: 'vendors', label: 'Fournisseurs', icon: Building2 },
+  { id: 'clients', label: 'Clients', icon: Users },
   { id: 'forecast', label: 'Prévisionnel', icon: CalendarRange },
   { id: 'kpis', label: 'KPI’s', icon: Gauge },
   { id: 'connections', label: 'Connexions', icon: Settings2 },
@@ -146,30 +147,109 @@ const Vendors = ({ refreshKey }: { refreshKey: number }) => {
   </div>;
 };
 
-const expenseDefaults = { label: '', vendor: '', amount: '', category: 'Logiciels & abonnements', subcategory: 'Abonnement', kind: 'monthly' as 'monthly' | 'one_off', startDate: new Date().toISOString().slice(0, 10), endDate: '', notes: '' };
+const Clients = ({ refreshKey }: { refreshKey: number }) => {
+  const { data, error, loading } = useRemote<ClientsResponse>('/api/clients', refreshKey);
+  const [search, setSearch] = useState('');
+  if (loading) return <Loading />;
+  if (error || !data) return <ErrorState message={error} />;
+  const needle = search.trim().toLocaleLowerCase('fr-FR');
+  const filtered = data.clients.filter((client) => !needle || [client.name, client.email || '', ...client.offers.map((offer) => offer.productName)]
+    .some((value) => value.toLocaleLowerCase('fr-FR').includes(needle)));
+  const topChart = data.clients.slice(0, 10).map((client) => ({ name: client.name, value: client.lifetimeSpendHtCents }));
+  return <div className="page-stack">
+    <div className="kpi-grid clients-kpis">
+      <KpiCard icon={Users} label="Clients mensuels" value={String(data.summary.activeClientCount)} detail={`${data.summary.activeSubscriptionCount} abonnement(s) actif(s)`} />
+      <KpiCard icon={CircleDollarSign} label="MRR total HT" value={formatEUR(data.summary.totalMrrHtCents)} detail="Abonnements Stripe actifs" tone="good" />
+      <KpiCard icon={ShoppingCart} label="Panier mensuel moyen HT" value={formatEUR(data.summary.averageMonthlyBasketHtCents)} detail="MRR HT ÷ clients mensuels" />
+      <KpiCard icon={PiggyBank} label="CA encaissé HT" value={formatEUR(data.summary.lifetimeSpendHtCents)} detail={`${data.summary.paidInvoiceCount} facture(s) payée(s)`} />
+      <KpiCard icon={Scale} label="Facture moyenne HT" value={formatEUR(data.summary.averageInvoiceHtCents)} detail="CA HT ÷ factures payées" />
+    </div>
+    <div className="notice security"><Database size={18} /><span>Les noms et emails clients restent dans la base SQLite locale. Ils ne sont jamais enregistrés dans GitHub.</span></div>
+    <section className="card chart-card"><div className="section-title"><div><h2>Top clients par chiffre d’affaires</h2><p>Classement sur les factures Stripe payées, montants hors taxes</p></div></div>
+      {topChart.length ? <ResponsiveContainer width="100%" height={Math.max(330, topChart.length * 42)}><BarChart data={topChart} layout="vertical" margin={{ left: 25, right: 25 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} /><XAxis type="number" tickFormatter={(value) => `${Math.round(value / 100)} €`} /><YAxis type="category" dataKey="name" width={155} tick={{ fontSize: 11 }} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Bar dataKey="value" name="CA encaissé HT" fill="#2f765d" radius={[0, 6, 6, 0]} /></BarChart></ResponsiveContainer> : <Empty>Synchronise Stripe pour afficher les clients mensuels.</Empty>}
+    </section>
+    <section className="card"><div className="section-title"><div><h2>Classement clients</h2><p>Offres actives, MRR HT et historique des factures payées.</p></div></div>
+      <div className="toolbar client-toolbar"><div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Rechercher un client ou une offre…" /></div></div>
+      {filtered.length ? <div className="table-wrap"><table className="clients-table"><thead><tr><th>Rang</th><th>Client</th><th>Offre(s) active(s)</th><th className="amount">MRR HT</th><th className="amount">CA encaissé HT</th><th className="amount">Panier facture HT</th><th>Dernier paiement</th></tr></thead><tbody>{filtered.map((client) => <tr key={client.id}><td><span className={`rank rank-${client.rank}`}>{client.rank}</span></td><td><strong>{client.name}</strong>{client.email && <small className="block">{client.email}</small>}<small className="block">{client.activeSubscriptionCount} abonnement(s)</small></td><td><div className="offer-list">{client.offers.map((offer) => <span className="tag" key={`${offer.subscriptionId}-${offer.priceId}`}>{offer.productName}<small>{offer.quantity > 1 ? ` × ${offer.quantity}` : ''} · {offer.interval === 'year' ? 'annuel' : offer.interval === 'month' ? 'mensuel' : offer.interval}</small></span>)}</div></td><td className="amount income"><strong>{formatEUR(client.currentMrrHtCents)}</strong></td><td className="amount"><strong>{formatEUR(client.lifetimeSpendHtCents)}</strong><small className="block">{client.paidInvoiceCount} facture(s)</small></td><td className="amount">{formatEUR(client.averageInvoiceHtCents)}</td><td>{formatDate(client.lastPaidAt)}</td></tr>)}</tbody></table></div> : <Empty>Aucun client ne correspond à la recherche.</Empty>}
+    </section>
+  </div>;
+};
+
+const expenseDefaults = {
+  label: '', vendor: '', amount: '', taxMode: 'ht' as 'ht' | 'ttc' | 'reverse_charge', vatRate: '20',
+  category: 'Logiciels & abonnements', subcategory: 'Abonnement', kind: 'monthly' as 'monthly' | 'one_off',
+  startDate: new Date().toISOString().slice(0, 10), endDate: '', notes: '', active: true,
+};
 
 const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) => {
   const { data, error, loading } = useRemote<ForecastResponse>('/api/forecast?months=12', refreshKey);
   const [form, setForm] = useState(expenseDefaults);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setSaving(true); setFormError('');
     try {
-      await api('/api/planned-expenses', { method: 'POST', body: JSON.stringify({ label: form.label, vendor: form.vendor, amountCents: Math.round(Number(form.amount.replace(',', '.')) * 100), category: form.category, subcategory: form.subcategory, kind: form.kind, startDate: form.startDate, endDate: form.kind === 'monthly' && form.endDate ? form.endDate : null, notes: form.notes || null, active: true }) });
-      setForm(expenseDefaults); onChanged();
+      await api(editingId ? `/api/planned-expenses/${editingId}` : '/api/planned-expenses', {
+        method: editingId ? 'PUT' : 'POST',
+        body: JSON.stringify({
+          label: form.label, vendor: form.vendor,
+          enteredAmountCents: Math.round(Number(form.amount.replace(',', '.')) * 100),
+          taxMode: form.taxMode, vatRateBasisPoints: Math.round(Number(form.vatRate.replace(',', '.')) * 100),
+          category: form.category, subcategory: form.subcategory, kind: form.kind, startDate: form.startDate,
+          endDate: form.kind === 'monthly' && form.endDate ? form.endDate : null,
+          notes: form.notes || null, active: form.active,
+        }),
+      });
+      setForm(expenseDefaults); setEditingId(null); onChanged();
     } catch (reason) { setFormError(reason instanceof Error ? reason.message : 'Erreur'); }
     finally { setSaving(false); }
   };
+  const edit = (expense: PlannedExpense) => {
+    setEditingId(expense.id);
+    setForm({
+      label: expense.label, vendor: expense.vendor, amount: String(expense.enteredAmountCents / 100),
+      taxMode: expense.taxMode, vatRate: String(expense.vatRateBasisPoints / 100), category: expense.category,
+      subcategory: expense.subcategory, kind: expense.kind, startDate: expense.startDate, endDate: expense.endDate || '',
+      notes: expense.notes || '', active: expense.active,
+    });
+    window.scrollTo({ top: 500, behavior: 'smooth' });
+  };
+  const cancelEdit = () => { setEditingId(null); setForm(expenseDefaults); setFormError(''); };
   const remove = async (id: number) => { if (!window.confirm('Supprimer cette dépense prévue ?')) return; await api(`/api/planned-expenses/${id}`, { method: 'DELETE' }); onChanged(); };
   if (loading) return <Loading />;
   if (error || !data) return <ErrorState message={error} />;
   const chart = data.months.map((month) => ({ ...month, expenses: month.totalExpensesCents, balance: month.projectedBalanceCents, income: month.stripeMrrCents }));
+  const enteredCents = Math.round(Number(form.amount.replace(',', '.') || 0) * 100);
+  const vatBasisPoints = Math.round(Number(form.vatRate.replace(',', '.') || 0) * 100);
+  const previewHtCents = form.taxMode === 'ttc' ? Math.round(enteredCents / (1 + vatBasisPoints / 10_000)) : enteredCents;
   return <div className="page-stack">
     <div className="three-columns"><KpiCard icon={WalletCards} label="Solde de départ" value={formatEUR(data.assumptions.cashBalanceCents)} detail="Trésorerie Qonto actuelle" /><KpiCard icon={CircleDollarSign} label="MRR HT utilisé" value={formatEUR(data.assumptions.stripeMrrCents)} detail="Hypothèse mensuelle Stripe hors taxes" tone="good" /><KpiCard icon={Building2} label="Fournisseurs récurrents" value={formatEUR(data.assumptions.recurringQontoCents)} detail="Base mensuelle détectée dans Qonto" /></div>
     <section className="card chart-card"><div className="section-title"><div><h2>Prévision à 12 mois</h2><p>Solde projeté = trésorerie + MRR Stripe HT − fournisseurs récurrents − dépenses ajoutées.</p></div></div><ResponsiveContainer width="100%" height={330}><AreaChart data={chart}><defs><linearGradient id="forecastFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#2f765d" stopOpacity={0.35} /><stop offset="95%" stopColor="#2f765d" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="label" /><YAxis tickFormatter={(value) => `${Math.round(value / 100)} €`} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Area type="monotone" dataKey="balance" name="Trésorerie projetée" stroke="#2f765d" strokeWidth={3} fill="url(#forecastFill)" /><Area type="monotone" dataKey="expenses" name="Dépenses prévues" stroke="#d87a53" fill="transparent" /></AreaChart></ResponsiveContainer></section>
-    <div className="two-columns forecast-layout"><section className="card"><div className="section-title"><div><h2>Ajouter une dépense future</h2><p>Mensuelle ou unique, avec sa date de démarrage.</p></div></div><form className="expense-form" onSubmit={submit}><label>Nom de la dépense<input required minLength={2} value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder="Ex. Abonnement logiciel CRM" /></label><label>Fournisseur<input required minLength={2} value={form.vendor} onChange={(event) => setForm({ ...form, vendor: event.target.value })} placeholder="Ex. HubSpot" /></label><div className="form-row"><label>Montant TTC (€)<input required inputMode="decimal" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} placeholder="99,00" /></label><label>Type<select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value as 'monthly' | 'one_off' })}><option value="monthly">Mensuelle</option><option value="one_off">Unique</option></select></label></div><div className="form-row"><label>Catégorie<select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}><option>Logiciels & abonnements</option><option>Marketing & acquisition</option><option>Infrastructure & hébergement</option><option>Prestataires & honoraires</option><option>Personnel</option><option>Locaux & fonctionnement</option><option>Banque & finance</option><option>Déplacements & repas</option><option>Taxes & administrations</option><option>Assurances</option><option>Autres dépenses</option></select></label><label>Sous-catégorie<input required value={form.subcategory} onChange={(event) => setForm({ ...form, subcategory: event.target.value })} /></label></div><div className="form-row"><label>{form.kind === 'monthly' ? 'À partir du' : 'Date prévue'}<input required type="date" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></label>{form.kind === 'monthly' && <label>Jusqu’au (facultatif)<input type="date" value={form.endDate} onChange={(event) => setForm({ ...form, endDate: event.target.value })} /></label>}</div><label>Notes<textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="Contexte ou hypothèse…" /></label>{formError && <p className="form-error">{formError}</p>}<button className="button primary" disabled={saving}>{saving ? <Loader2 className="spin" size={17} /> : <Plus size={17} />} Ajouter au prévisionnel</button></form></section>
-      <section className="card"><div className="section-title"><div><h2>Dépenses ajoutées</h2><p>{data.plannedExpenses.length} dépense(s) future(s)</p></div></div>{data.plannedExpenses.length ? <div className="planned-list">{data.plannedExpenses.map((expense) => <div className="planned-row" key={expense.id}><div className="planned-icon">{expense.kind === 'monthly' ? <RefreshCw size={18} /> : <CircleDollarSign size={18} />}</div><div className="planned-info"><strong>{expense.label}</strong><span>{expense.vendor} · {expense.category}</span><small>{expense.kind === 'monthly' ? `Tous les mois à partir du ${formatDate(expense.startDate)}` : `Le ${formatDate(expense.startDate)}`}{expense.endDate ? ` jusqu’au ${formatDate(expense.endDate)}` : ''}</small></div><strong>{formatEUR(expense.amountCents)}</strong><button className="icon-button danger" onClick={() => void remove(expense.id)} aria-label="Supprimer"><Trash2 size={17} /></button></div>)}</div> : <Empty>Aucune dépense future ajoutée.</Empty>}</section></div>
+    <section className="card future-cost-editor"><div className="section-title"><div><h2>{editingId ? 'Modifier le coût futur' : 'Ajouter un coût futur'}</h2><p>Le montant retenu dans toutes les projections est automatiquement converti en hors taxes.</p></div>{editingId && <span className="status connected">Modification en cours</span>}</div>
+      <form className="expense-form" onSubmit={submit}>
+        <div className="form-grid-3">
+          <label>Nom du coût<input required minLength={2} value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder="Ex. Abonnement logiciel CRM" /></label>
+          <label>Fournisseur<input required minLength={2} value={form.vendor} onChange={(event) => setForm({ ...form, vendor: event.target.value })} placeholder="Ex. HubSpot" /></label>
+          <label>Récurrence<select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value as 'monthly' | 'one_off' })}><option value="monthly">Mensuelle</option><option value="one_off">Unique</option></select></label>
+          <label>Montant saisi (€)<input required inputMode="decimal" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} placeholder="120,00" /></label>
+          <label>Nature du montant<select value={form.taxMode} onChange={(event) => setForm({ ...form, taxMode: event.target.value as 'ht' | 'ttc' | 'reverse_charge' })}><option value="ht">Montant HT</option><option value="ttc">Montant TTC</option><option value="reverse_charge">TVA autoliquidée</option></select></label>
+          <label>Taux de TVA (%)<input required min="0" max="100" step="0.1" type="number" disabled={form.taxMode === 'ht'} value={form.vatRate} onChange={(event) => setForm({ ...form, vatRate: event.target.value })} /></label>
+          <label>Catégorie<select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}><option>Logiciels & abonnements</option><option>Marketing & acquisition</option><option>Infrastructure & hébergement</option><option>Prestataires & honoraires</option><option>Personnel</option><option>Locaux & fonctionnement</option><option>Banque & finance</option><option>Déplacements & repas</option><option>Taxes & administrations</option><option>Assurances</option><option>Autres dépenses</option></select></label>
+          <label>Sous-catégorie<input required value={form.subcategory} onChange={(event) => setForm({ ...form, subcategory: event.target.value })} /></label>
+          <label>{form.kind === 'monthly' ? 'À partir du' : 'Date prévue'}<input required type="date" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></label>
+          {form.kind === 'monthly' && <label>Jusqu’au (facultatif)<input type="date" value={form.endDate} onChange={(event) => setForm({ ...form, endDate: event.target.value })} /></label>}
+          <label className="checkbox-label"><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /><span>Inclure ce coût dans le prévisionnel</span></label>
+        </div>
+        <label>Notes<textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="Contexte, hypothèse ou détail fiscal…" /></label>
+        <div className="tax-preview"><span>Montant retenu dans le prévisionnel</span><strong>{formatEUR(previewHtCents)} HT</strong><small>{form.taxMode === 'ttc' ? `Conversion du TTC avec ${form.vatRate || '0'} % de TVA` : form.taxMode === 'reverse_charge' ? 'TVA autoliquidée : coût conservé hors taxes' : 'Montant déjà saisi hors taxes'}</small></div>
+        {formError && <p className="form-error">{formError}</p>}
+        <div className="form-actions"><button className="button primary" disabled={saving}>{saving ? <Loader2 className="spin" size={17} /> : editingId ? <Pencil size={17} /> : <Plus size={17} />}{editingId ? ' Enregistrer les modifications' : ' Ajouter au prévisionnel'}</button>{editingId && <button type="button" className="button secondary" onClick={cancelEdit}><XCircle size={17} /> Annuler</button>}</div>
+      </form>
+    </section>
+    <section className="card"><div className="section-title"><div><h2>Coûts futurs</h2><p>{data.plannedExpenses.length} coût(s) · tous les totaux sont affichés en HT</p></div></div>
+      {data.plannedExpenses.length ? <div className="table-wrap"><table className="future-costs-table"><thead><tr><th>Coût / fournisseur</th><th>Catégorie</th><th>Récurrence</th><th className="amount">Montant saisi</th><th>Fiscalité</th><th className="amount">Retenu HT</th><th>Statut</th><th>Actions</th></tr></thead><tbody>{data.plannedExpenses.map((expense) => <tr key={expense.id}><td><strong>{expense.label}</strong><small className="block">{expense.vendor}</small>{expense.notes && <small className="block">{expense.notes}</small>}</td><td><span className="tag">{expense.category}</span><small className="block">{expense.subcategory}</small></td><td>{expense.kind === 'monthly' ? 'Mensuel' : 'Unique'}<small className="block">{expense.kind === 'monthly' ? `Dès le ${formatDate(expense.startDate)}` : formatDate(expense.startDate)}{expense.endDate ? ` · fin ${formatDate(expense.endDate)}` : ''}</small></td><td className="amount">{formatEUR(expense.enteredAmountCents)}</td><td>{expense.taxMode === 'ttc' ? `TTC · TVA ${expense.vatRateBasisPoints / 100} %` : expense.taxMode === 'reverse_charge' ? `Autoliquidation · ${expense.vatRateBasisPoints / 100} %` : 'HT'}</td><td className="amount expense"><strong>{formatEUR(expense.amountCents)}</strong></td><td><span className={`status ${expense.active ? 'connected' : 'disconnected'}`}>{expense.active ? 'Inclus' : 'En pause'}</span></td><td><div className="row-actions"><button className="icon-button" onClick={() => edit(expense)} aria-label="Modifier"><Pencil size={17} /></button><button className="icon-button danger" onClick={() => void remove(expense.id)} aria-label="Supprimer"><Trash2 size={17} /></button></div></td></tr>)}</tbody></table></div> : <Empty>Aucun coût futur ajouté.</Empty>}
+    </section>
     <section className="card"><div className="section-title"><div><h2>Détail mensuel du prévisionnel</h2><p>Les postes automatiques Qonto et les ajouts manuels sont séparés.</p></div></div><div className="table-wrap"><table><thead><tr><th>Mois</th><th className="amount">Fournisseurs Qonto</th><th className="amount">Ajouts mensuels</th><th className="amount">Dépenses uniques</th><th className="amount">Total dépenses</th><th className="amount">MRR Stripe HT</th><th className="amount">Solde projeté</th></tr></thead><tbody>{data.months.map((month) => <tr key={month.key}><td><strong>{month.label}</strong></td><td className="amount">{formatEUR(month.recurringQontoCents)}</td><td className="amount">{formatEUR(month.plannedMonthlyCents)}</td><td className="amount">{formatEUR(month.plannedOneOffCents)}</td><td className="amount expense"><strong>{formatEUR(month.totalExpensesCents)}</strong></td><td className="amount income">{formatEUR(month.stripeMrrCents)}</td><td className="amount"><strong>{formatEUR(month.projectedBalanceCents)}</strong></td></tr>)}</tbody></table></div></section>
   </div>;
 };
@@ -237,8 +317,8 @@ const Connections = ({ refreshKey, onChanged }: { refreshKey: number; onChanged:
   const sync = useCallback(async (source: 'qonto' | 'stripe') => { setSyncing(source); setMessage(''); try { await api(`/api/sync/${source}`, { method: 'POST' }); setMessage(`${source === 'qonto' ? 'Qonto' : 'Stripe'} synchronisé avec succès.`); onChanged(); } catch (reason) { setMessage(reason instanceof Error ? reason.message : 'Erreur'); } finally { setSyncing(null); } }, [onChanged]);
   if (loading) return <Loading />;
   if (error || !data) return <ErrorState message={error} />;
-  const ConnectionCard = ({ source, icon: Icon, configured, lastRun }: { source: 'qonto' | 'stripe'; icon: typeof Landmark; configured: boolean; lastRun: ConnectionsResponse['qonto']['lastRun'] }) => <section className="card connection-card"><div className="connection-logo"><Icon size={28} /></div><div className="connection-main"><div className="section-title"><div><h2>{source === 'qonto' ? 'Qonto' : 'Stripe'}</h2><p>{source === 'qonto' ? 'Comptes, soldes, transactions, catégories et fournisseurs.' : 'MRR HT et abonnements actifs en lecture seule.'}</p></div><span className={`status ${configured ? 'connected' : 'disconnected'}`}>{configured ? <CheckCircle2 size={15} /> : <XCircle size={15} />}{configured ? 'Configuré' : 'Non configuré'}</span></div><div className="connection-meta"><span>Dernière synchronisation : <strong>{formatDate(lastRun?.completed_at || null)}</strong></span>{lastRun && <span>{lastRun.imported_count} élément(s) · {lastRun.message}</span>}</div><button className="button primary" disabled={!configured || syncing !== null} onClick={() => void sync(source)}>{syncing === source ? <Loader2 className="spin" size={17} /> : <RefreshCw size={17} />} Synchroniser maintenant</button></div></section>;
-  return <div className="page-stack"><div className="notice security"><Database size={18} /><span>Les clés ne sont jamais envoyées au navigateur. Le serveur écoute seulement sur <code>127.0.0.1</code> par défaut.</span></div>{message && <div className="notice">{message}</div>}<div className="connections-grid"><ConnectionCard source="qonto" icon={Landmark} configured={data.qonto.configured} lastRun={data.qonto.lastRun} /><ConnectionCard source="stripe" icon={CircleDollarSign} configured={data.stripe.configured} lastRun={data.stripe.lastRun} /></div><section className="card setup"><div className="section-title"><div><h2>Configuration locale</h2><p>Copie <code>.env.example</code> vers <code>.env</code>, sans jamais commiter ce dernier.</p></div></div><ol><li><strong>Qonto recommandé :</strong> renseigner <code>QONTO_ACCESS_TOKEN</code> avec OAuth et le scope <code>organization.read</code>.</li><li><strong>Qonto alternatif :</strong> renseigner <code>QONTO_API_LOGIN</code> et <code>QONTO_API_SECRET</code> pour une seule entreprise.</li><li><strong>Stripe :</strong> renseigner une Restricted API Key <code>rk_live_…</code> dans <code>STRIPE_RESTRICTED_KEY</code>, avec les lectures Subscriptions, Prices et Products uniquement.</li><li>Redémarrer l’application puis lancer chaque synchronisation.</li></ol></section></div>;
+  const ConnectionCard = ({ source, icon: Icon, configured, lastRun }: { source: 'qonto' | 'stripe'; icon: typeof Landmark; configured: boolean; lastRun: ConnectionsResponse['qonto']['lastRun'] }) => <section className="card connection-card"><div className="connection-logo"><Icon size={28} /></div><div className="connection-main"><div className="section-title"><div><h2>{source === 'qonto' ? 'Qonto' : 'Stripe'}</h2><p>{source === 'qonto' ? 'Comptes, soldes, transactions, catégories et fournisseurs.' : 'MRR HT, clients, offres et factures payées en lecture seule.'}</p></div><span className={`status ${configured ? 'connected' : 'disconnected'}`}>{configured ? <CheckCircle2 size={15} /> : <XCircle size={15} />}{configured ? 'Configuré' : 'Non configuré'}</span></div><div className="connection-meta"><span>Dernière synchronisation : <strong>{formatDate(lastRun?.completed_at || null)}</strong></span>{lastRun && <span>{lastRun.imported_count} élément(s) · {lastRun.message}</span>}</div><button className="button primary" disabled={!configured || syncing !== null} onClick={() => void sync(source)}>{syncing === source ? <Loader2 className="spin" size={17} /> : <RefreshCw size={17} />} Synchroniser maintenant</button></div></section>;
+  return <div className="page-stack"><div className="notice security"><Database size={18} /><span>Les clés ne sont jamais envoyées au navigateur. Le serveur écoute seulement sur <code>127.0.0.1</code> par défaut.</span></div>{message && <div className="notice">{message}</div>}<div className="connections-grid"><ConnectionCard source="qonto" icon={Landmark} configured={data.qonto.configured} lastRun={data.qonto.lastRun} /><ConnectionCard source="stripe" icon={CircleDollarSign} configured={data.stripe.configured} lastRun={data.stripe.lastRun} /></div><section className="card setup"><div className="section-title"><div><h2>Configuration locale</h2><p>Copie <code>.env.example</code> vers <code>.env</code>, sans jamais commiter ce dernier.</p></div></div><ol><li><strong>Qonto recommandé :</strong> renseigner <code>QONTO_ACCESS_TOKEN</code> avec OAuth et le scope <code>organization.read</code>.</li><li><strong>Qonto alternatif :</strong> renseigner <code>QONTO_API_LOGIN</code> et <code>QONTO_API_SECRET</code> pour une seule entreprise.</li><li><strong>Stripe :</strong> renseigner une Restricted API Key <code>rk_live_…</code> dans <code>STRIPE_RESTRICTED_KEY</code>, avec les lectures <strong>Subscriptions, Customers, Prices, Products et Invoices</strong>.</li><li>Redémarrer l’application puis lancer chaque synchronisation.</li></ol></section></div>;
 };
 
 export default function App() {
@@ -246,5 +326,5 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = useCallback(() => setRefreshKey((key) => key + 1), []);
   const active = tabs.find((item) => item.id === tab)!;
-  return <div className="app-shell"><aside><div className="brand"><div className="brand-mark"><BarChart3 /></div><div><strong>Pilotage</strong><span>Bien-être Connect</span></div></div><nav>{tabs.map((item) => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={19} />{item.label}</button>)}</nav><div className="sidebar-foot"><Landmark size={16} /><span>Qonto + Stripe<br />Lecture seule</span></div></aside><main><header><div><span className="eyebrow">Pilotage financier</span><h1>{active.label}</h1></div><button className="button secondary" onClick={refresh}><RefreshCw size={17} /> Actualiser</button></header><div className="content">{tab === 'dashboard' && <Dashboard refreshKey={refreshKey} />}{tab === 'expenses' && <Expenses refreshKey={refreshKey} />}{tab === 'vendors' && <Vendors refreshKey={refreshKey} />}{tab === 'forecast' && <Forecast refreshKey={refreshKey} onChanged={refresh} />}{tab === 'kpis' && <FinancialKpis refreshKey={refreshKey} onChanged={refresh} />}{tab === 'connections' && <Connections refreshKey={refreshKey} onChanged={refresh} />}</div></main></div>;
+  return <div className="app-shell"><aside><div className="brand"><div className="brand-mark"><BarChart3 /></div><div><strong>Pilotage</strong><span>Bien-être Connect</span></div></div><nav>{tabs.map((item) => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={19} />{item.label}</button>)}</nav><div className="sidebar-foot"><Landmark size={16} /><span>Qonto + Stripe<br />Lecture seule</span></div></aside><main><header><div><span className="eyebrow">Pilotage financier</span><h1>{active.label}</h1></div><button className="button secondary" onClick={refresh}><RefreshCw size={17} /> Actualiser</button></header><div className="content">{tab === 'dashboard' && <Dashboard refreshKey={refreshKey} />}{tab === 'expenses' && <Expenses refreshKey={refreshKey} />}{tab === 'vendors' && <Vendors refreshKey={refreshKey} />}{tab === 'clients' && <Clients refreshKey={refreshKey} />}{tab === 'forecast' && <Forecast refreshKey={refreshKey} onChanged={refresh} />}{tab === 'kpis' && <FinancialKpis refreshKey={refreshKey} onChanged={refresh} />}{tab === 'connections' && <Connections refreshKey={refreshKey} onChanged={refresh} />}</div></main></div>;
 }
