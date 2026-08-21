@@ -20,6 +20,7 @@ import {
 import { EXPENSE_CATEGORIES } from './classification.js';
 import { isQontoConfigured, syncQonto } from './qonto.js';
 import { isStripeConfigured, syncStripe } from './stripe.js';
+import { getDashboardTrend, resolveDashboardPeriod } from './dashboard.js';
 
 const app = express();
 const db = getDatabase();
@@ -37,7 +38,7 @@ const plannedExpenseSchema = z.object({
   label: z.string().trim().min(2).max(160),
   vendor: z.string().trim().min(2).max(120),
   enteredAmountCents: z.coerce.number().int().positive().max(1_000_000_000),
-  taxMode: z.enum(['ht', 'ttc', 'reverse_charge']),
+  taxMode: z.enum(['ht', 'ttc', 'no_vat', 'reverse_charge']),
   vatRateBasisPoints: z.coerce.number().int().min(0).max(10_000),
   category: z.string().trim().min(2).max(100),
   subcategory: z.string().trim().min(2).max(100),
@@ -280,35 +281,42 @@ app.get('/api/forecast', (req, res) => {
   });
 });
 
-app.get('/api/dashboard', (_req, res) => {
+app.get('/api/dashboard', (req, res) => {
   const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const mode = z.enum(['day', 'week', 'month', 'year', 'custom']).catch('month').parse(req.query.period);
+  const period = resolveDashboardPeriod(mode,
+    typeof req.query.from === 'string' ? req.query.from : undefined,
+    typeof req.query.to === 'string' ? req.query.to : undefined,
+    now);
   const next30 = new Date(now.getTime() + 30 * 86400_000);
-  const currentExpenses = getExpenseTransactions(db, { from: monthStart });
-  const allExpenses = getExpenseTransactions(db);
+  const periodExpenses = getExpenseTransactions(db, { from: period.from, to: period.to });
   const recurring = detectRecurringVendors(db);
   const planned = listPlannedExpenses(db);
   const stripe = db.prepare('SELECT * FROM stripe_metrics WHERE id=1').get() as { mrr_cents: number; active_subscriptions: number; synced_at: string } | undefined;
   const qontoRun = db.prepare("SELECT completed_at FROM sync_runs WHERE source='qonto' AND status='success' ORDER BY id DESC LIMIT 1").get() as { completed_at: string } | undefined;
   const stripeRun = db.prepare("SELECT completed_at FROM sync_runs WHERE source='stripe' AND status='success' ORDER BY id DESC LIMIT 1").get() as { completed_at: string } | undefined;
   const upcoming = planned.filter((expense) => expense.active && new Date(expense.startDate) <= next30).slice(0, 8);
-  const hierarchy = buildExpenseHierarchy(currentExpenses);
+  const hierarchy = buildExpenseHierarchy(periodExpenses);
+  const trend = getDashboardTrend(db, period);
+  const revenueHtCents = trend.reduce((sum, point) => sum + point.revenueHtCents, 0);
 
   res.json({
+    period,
     connections: {
       qonto: isQontoConfigured(), stripe: isStripeConfigured(), qontoLastSync: qontoRun?.completed_at || null, stripeLastSync: stripeRun?.completed_at || null,
     },
     kpis: {
       cashBalanceCents: (db.prepare("SELECT COALESCE(SUM(balance_cents), 0) value FROM bank_accounts WHERE currency='EUR'").get() as { value: number }).value,
-      currentMonthExpensesCents: currentExpenses.reduce((sum, row) => sum + row.amountCents, 0),
+      periodExpensesCents: periodExpenses.reduce((sum, row) => sum + row.amountCents, 0),
+      revenueHtCents,
       recurringMonthlyCents: recurring.reduce((sum, vendor) => sum + vendor.estimatedMonthlyCents, 0),
       plannedNext30DaysCents: upcoming.reduce((sum, expense) => sum + expense.amountCents, 0),
       stripeMrrCents: stripe?.mrr_cents || 0,
       activeStripeSubscriptions: stripe?.active_subscriptions || 0,
     },
     topCategories: hierarchy.slice(0, 7).map((category) => ({ name: category.category, valueCents: category.totalCents })),
-    cashflowMonths: getCashflowMonths(db, 6),
-    recentExpenses: allExpenses.slice(0, 8),
+    trend,
+    recentExpenses: periodExpenses.slice(0, 8),
     upcomingPlanned: upcoming,
   });
 });

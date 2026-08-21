@@ -59,6 +59,10 @@ describe('prévisionnel', () => {
     expect(plannedAmountExcludingTax(10000, 'reverse_charge', 2000)).toBe(10000);
   });
 
+  it('conserve tel quel un coût sans TVA', () => {
+    expect(plannedAmountExcludingTax(10000, 'no_vat', 0)).toBe(10000);
+  });
+
   it('exclut du prévisionnel une dépense à discuter mais permet de l’afficher dans le calendrier', () => {
     const discussion = plan({ active: false, kind: 'quarterly', startDate: '2026-09-01' });
     expect(plannedExpenseOccursInMonth(discussion, '2026-12')).toBe(false);

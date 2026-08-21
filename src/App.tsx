@@ -69,36 +69,49 @@ const KpiCard = ({ icon: Icon, label, value, detail, tone }: {
 }) => <div className={`card kpi ${tone || ''}`}><div className="kpi-head"><span>{label}</span><Icon size={18} /></div><strong>{value}</strong><small>{detail}</small></div>;
 
 const Dashboard = ({ refreshKey }: { refreshKey: number }) => {
-  const { data, error, loading } = useRemote<DashboardResponse>('/api/dashboard', refreshKey);
+  const today = new Date().toISOString().slice(0, 10);
+  const defaultFrom = `${new Date().getFullYear()}-01-01`;
+  const [periodMode, setPeriodMode] = useState<DashboardResponse['period']['mode']>('month');
+  const [customDraft, setCustomDraft] = useState({ from: defaultFrom, to: today });
+  const [customRange, setCustomRange] = useState(customDraft);
+  const dashboardPath = useMemo(() => {
+    const params = new URLSearchParams({ period: periodMode });
+    if (periodMode === 'custom') { params.set('from', customRange.from); params.set('to', customRange.to); }
+    return `/api/dashboard?${params}`;
+  }, [periodMode, customRange]);
+  const { data, error, loading } = useRemote<DashboardResponse>(dashboardPath, refreshKey);
   if (loading) return <Loading />;
   if (error || !data) return <ErrorState message={error} />;
   const chart = data.topCategories.map((row) => ({ name: row.name, value: row.valueCents }));
-  const cashflowChart = data.cashflowMonths.map((month) => ({
-    name: month.label,
-    gains: month.inflowsCents,
-    pertes: month.outflowsCents,
+  const cashflowChart = data.trend.map((point) => ({
+    name: point.label,
+    gains: point.inflowsCents,
+    pertes: point.outflowsCents,
+    caHt: point.revenueHtCents,
   }));
   return <div className="page-stack">
+    <section className="card dashboard-period-bar"><div><span className="eyebrow">Période analysée</span><strong>{data.period.label}</strong></div><div className="period-actions"><div className="period-segmented">{([['day', 'Journalier'], ['week', 'Hebdomadaire'], ['month', 'Mensuel'], ['year', 'Annuel'], ['custom', 'Personnalisé']] as const).map(([value, label]) => <button key={value} className={periodMode === value ? 'active' : ''} onClick={() => setPeriodMode(value)}>{label}</button>)}</div>{periodMode === 'custom' && <div className="custom-period"><label>Du<input type="date" value={customDraft.from} max={customDraft.to} onChange={(event) => setCustomDraft({ ...customDraft, from: event.target.value })} /></label><label>Au<input type="date" value={customDraft.to} min={customDraft.from} onChange={(event) => setCustomDraft({ ...customDraft, to: event.target.value })} /></label><button className="button primary" onClick={() => setCustomRange(customDraft)}>Appliquer</button></div>}</div></section>
     {(!data.connections.qonto || !data.connections.stripe) && <div className="notice"><Settings2 size={18} /><span>Connecte Qonto et Stripe dans l’onglet Connexions pour alimenter toutes les données réelles.</span></div>}
-    <div className="kpi-grid">
+    <div className="kpi-grid dashboard-kpis">
       <KpiCard icon={WalletCards} label="Trésorerie Qonto" value={formatEUR(data.kpis.cashBalanceCents)} detail="Solde actuel des comptes EUR" />
-      <KpiCard icon={TrendingDown} label="Dépenses du mois" value={formatEUR(data.kpis.currentMonthExpensesCents)} detail="Toutes dépenses Qonto catégorisées" tone="bad" />
+      <KpiCard icon={CircleDollarSign} label="Chiffre d’affaires HT" value={formatEUR(data.kpis.revenueHtCents)} detail={`Factures Stripe payées · ${data.period.label.toLowerCase()}`} tone="good" />
+      <KpiCard icon={TrendingDown} label="Dépenses de la période" value={formatEUR(data.kpis.periodExpensesCents)} detail="Toutes dépenses Qonto catégorisées" tone="bad" />
       <KpiCard icon={Building2} label="Abonnements fournisseurs" value={formatEUR(data.kpis.recurringMonthlyCents)} detail="Estimation mensuelle automatique" />
       <KpiCard icon={CalendarRange} label="Dépenses prévues à 30 jours" value={formatEUR(data.kpis.plannedNext30DaysCents)} detail="Ajouts manuels mensuels et uniques" />
       <KpiCard icon={CircleDollarSign} label="MRR Stripe HT" value={formatEUR(data.kpis.stripeMrrCents)} detail={`${data.kpis.activeStripeSubscriptions} abonnement(s) actif(s) · hors taxes`} tone="good" />
     </div>
-    <section className="card chart-card"><div className="section-title"><div><h2>Gains et pertes</h2><p>Comparatif mensuel des encaissements et décaissements constatés sur Qonto</p></div></div>
-      <ResponsiveContainer width="100%" height={330}><BarChart data={cashflowChart} barGap={7}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="name" /><YAxis tickFormatter={(value) => `${Math.round(value / 100)} €`} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Legend /><Bar dataKey="gains" name="Gains / encaissements" fill="#2f765d" radius={[6, 6, 0, 0]} /><Bar dataKey="pertes" name="Pertes / décaissements" fill="#d87a53" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer>
+    <section className="card chart-card"><div className="section-title"><div><h2>Gains, pertes et chiffre d’affaires HT</h2><p>{data.period.label} · regroupement {data.period.bucket === 'day' ? 'journalier' : data.period.bucket === 'week' ? 'hebdomadaire' : data.period.bucket === 'month' ? 'mensuel' : 'annuel'}</p></div></div>
+      <ResponsiveContainer width="100%" height={330}><BarChart data={cashflowChart} barGap={4}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="name" /><YAxis tickFormatter={(value) => `${Math.round(value / 100)} €`} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Legend /><Bar dataKey="gains" name="Encaissements Qonto" fill="#2f765d" radius={[6, 6, 0, 0]} /><Bar dataKey="caHt" name="CA HT Stripe" fill="#5c79a9" radius={[6, 6, 0, 0]} /><Bar dataKey="pertes" name="Décaissements Qonto" fill="#d87a53" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer>
     </section>
     <div className="two-columns">
-      <section className="card chart-card"><div className="section-title"><div><h2>Dépenses par grande catégorie</h2><p>Mois en cours</p></div></div>
+      <section className="card chart-card"><div className="section-title"><div><h2>Dépenses par grande catégorie</h2><p>{data.period.label}</p></div></div>
         {chart.length ? <ResponsiveContainer width="100%" height={310}><BarChart data={chart} layout="vertical" margin={{ left: 20, right: 20 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} /><XAxis type="number" tickFormatter={(value) => `${Math.round(value / 100)} €`} /><YAxis type="category" dataKey="name" width={145} tick={{ fontSize: 11 }} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Bar dataKey="value" name="Dépenses" fill="#d87a53" radius={[0, 6, 6, 0]} /></BarChart></ResponsiveContainer> : <Empty>Aucune dépense synchronisée.</Empty>}
       </section>
       <section className="card"><div className="section-title"><div><h2>Prochaines dépenses prévues</h2><p>Échéances saisies manuellement</p></div></div>
         {data.upcomingPlanned.length ? <div className="compact-list">{data.upcomingPlanned.map((expense) => <div key={expense.id} className="compact-row"><div><strong>{expense.label}</strong><span>{expense.vendor} · {expenseKindLabel(expense.kind)}</span></div><div className="right"><strong>{formatEUR(expense.amountCents)}</strong><span>{formatDate(expense.startDate)}</span></div></div>)}</div> : <Empty>Aucune dépense future enregistrée.</Empty>}
       </section>
     </div>
-    <section className="card"><div className="section-title"><div><h2>Dernières dépenses Qonto</h2><p>Importées et classées automatiquement</p></div></div>
+    <section className="card"><div className="section-title"><div><h2>Dernières dépenses Qonto de la période</h2><p>{data.period.label} · importées et classées automatiquement</p></div></div>
       {data.recentExpenses.length ? <div className="table-wrap"><table><thead><tr><th>Date</th><th>Fournisseur</th><th>Catégorie</th><th>Libellé</th><th className="amount">Montant</th></tr></thead><tbody>{data.recentExpenses.map((expense) => <tr key={expense.id}><td>{formatDate(expense.date)}</td><td><strong>{expense.vendor}</strong></td><td><span className="tag">{expense.category}</span></td><td>{expense.label}</td><td className="amount expense">−{formatEUR(expense.amountCents)}</td></tr>)}</tbody></table></div> : <Empty>Aucune dépense synchronisée.</Empty>}
     </section>
   </div>;
@@ -177,7 +190,7 @@ const Clients = ({ refreshKey }: { refreshKey: number }) => {
 };
 
 const expenseDefaults = {
-  label: '', vendor: '', amount: '', taxMode: 'ht' as 'ht' | 'ttc' | 'reverse_charge', vatRate: '20',
+  label: '', vendor: '', amount: '', taxMode: 'ht' as PlannedExpense['taxMode'], vatRate: '20',
   category: 'Logiciels & abonnements', subcategory: 'Abonnement', kind: 'monthly' as PlannedExpense['kind'],
   startDate: new Date().toISOString().slice(0, 10), endDate: '', notes: '', active: true,
 };
@@ -202,7 +215,7 @@ const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
         body: JSON.stringify({
           label: form.label, vendor: form.vendor,
           enteredAmountCents: Math.round(Number(form.amount.replace(',', '.')) * 100),
-          taxMode: form.taxMode, vatRateBasisPoints: Math.round(Number(form.vatRate.replace(',', '.')) * 100),
+          taxMode: form.taxMode, vatRateBasisPoints: form.taxMode === 'no_vat' ? 0 : Math.round(Number(form.vatRate.replace(',', '.')) * 100),
           category: form.category, subcategory: form.subcategory, kind: form.kind, startDate: form.startDate,
           endDate: form.kind !== 'one_off' && form.endDate ? form.endDate : null,
           notes: form.notes || null, active: form.active,
@@ -247,7 +260,7 @@ const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
   const calendarCostsFor = (monthKey: string) => data.plannedExpenses.filter((expense) =>
     (expense.active || showCalendarDiscussions) && plannedExpenseOccursInMonth(expense, monthKey, true));
   const selectedMonthCosts = calendarCostsFor(selectedMonthKey);
-  const renderCostTable = (expenses: PlannedExpense[], discussion: boolean) => expenses.length ? <div className="table-wrap"><table className="future-costs-table"><thead><tr><th>Coût / fournisseur</th><th>Catégorie</th><th>Récurrence</th><th className="amount">Montant saisi</th><th>Fiscalité</th><th className="amount">Retenu HT</th><th>Décision</th><th>Actions</th></tr></thead><tbody>{expenses.map((expense) => <tr key={expense.id}><td><strong>{expense.label}</strong><small className="block">{expense.vendor}</small>{expense.notes && <small className="block">{expense.notes}</small>}</td><td><span className="tag">{expense.category}</span><small className="block">{expense.subcategory}</small></td><td>{expenseKindLabel(expense.kind)}<small className="block">{expense.kind === 'one_off' ? formatDate(expense.startDate) : `Dès le ${formatDate(expense.startDate)}`}{expense.endDate ? ` · fin ${formatDate(expense.endDate)}` : ''}</small></td><td className="amount">{formatEUR(expense.enteredAmountCents)}</td><td>{expense.taxMode === 'ttc' ? `TTC · TVA ${expense.vatRateBasisPoints / 100} %` : expense.taxMode === 'reverse_charge' ? `Autoliquidation · ${expense.vatRateBasisPoints / 100} %` : 'HT'}</td><td className="amount expense"><strong>{formatEUR(expense.amountCents)}</strong></td><td><button className={`button decision-button ${discussion ? 'secondary' : 'discussion'}`} onClick={() => void setDecision(expense, discussion)}>{discussion ? 'Inclure' : 'Mettre de côté'}</button></td><td><div className="row-actions"><button className="icon-button" onClick={() => edit(expense)} aria-label="Modifier"><Pencil size={17} /></button><button className="icon-button danger" onClick={() => void remove(expense.id)} aria-label="Supprimer"><Trash2 size={17} /></button></div></td></tr>)}</tbody></table></div> : <Empty>{discussion ? 'Aucune dépense mise de côté pour le moment.' : 'Aucun coût inclus dans le prévisionnel.'}</Empty>;
+  const renderCostTable = (expenses: PlannedExpense[], discussion: boolean) => expenses.length ? <div className="table-wrap"><table className="future-costs-table"><thead><tr><th>Coût / fournisseur</th><th>Catégorie</th><th>Récurrence</th><th className="amount">Montant saisi</th><th>Fiscalité</th><th className="amount">Retenu HT</th><th>Décision</th><th>Actions</th></tr></thead><tbody>{expenses.map((expense) => <tr key={expense.id}><td><strong>{expense.label}</strong><small className="block">{expense.vendor}</small>{expense.notes && <small className="block">{expense.notes}</small>}</td><td><span className="tag">{expense.category}</span><small className="block">{expense.subcategory}</small></td><td>{expenseKindLabel(expense.kind)}<small className="block">{expense.kind === 'one_off' ? formatDate(expense.startDate) : `Dès le ${formatDate(expense.startDate)}`}{expense.endDate ? ` · fin ${formatDate(expense.endDate)}` : ''}</small></td><td className="amount">{formatEUR(expense.enteredAmountCents)}</td><td>{expense.taxMode === 'ttc' ? `TTC · TVA ${expense.vatRateBasisPoints / 100} %` : expense.taxMode === 'reverse_charge' ? `Autoliquidation · ${expense.vatRateBasisPoints / 100} %` : expense.taxMode === 'no_vat' ? 'Pas de TVA' : 'HT'}</td><td className="amount expense"><strong>{formatEUR(expense.amountCents)}</strong></td><td><button className={`button decision-button ${discussion ? 'secondary' : 'discussion'}`} onClick={() => void setDecision(expense, discussion)}>{discussion ? 'Inclure' : 'Mettre de côté'}</button></td><td><div className="row-actions"><button className="icon-button" onClick={() => edit(expense)} aria-label="Modifier"><Pencil size={17} /></button><button className="icon-button danger" onClick={() => void remove(expense.id)} aria-label="Supprimer"><Trash2 size={17} /></button></div></td></tr>)}</tbody></table></div> : <Empty>{discussion ? 'Aucune dépense mise de côté pour le moment.' : 'Aucun coût inclus dans le prévisionnel.'}</Empty>;
   return <div className="page-stack">
     <div className="three-columns"><KpiCard icon={WalletCards} label="Solde de départ" value={formatEUR(data.assumptions.cashBalanceCents)} detail="Trésorerie Qonto actuelle" /><KpiCard icon={CircleDollarSign} label="MRR HT utilisé" value={formatEUR(data.assumptions.stripeMrrCents)} detail="Hypothèse mensuelle Stripe hors taxes" tone="good" /><KpiCard icon={Building2} label="Fournisseurs récurrents" value={formatEUR(data.assumptions.recurringQontoCents)} detail="Base mensuelle détectée dans Qonto" /></div>
     <section className="card budget-calendar"><div className="section-title"><div><h2>Agenda budgétaire sur 12 mois</h2><p>Clique sur un mois pour explorer ses échéances, puis sur une dépense pour la modifier.</p></div><button className={`button ${showCalendarDiscussions ? 'discussion' : 'secondary'}`} onClick={() => setShowCalendarDiscussions((value) => !value)}>{showCalendarDiscussions ? 'Masquer' : 'Afficher'} les coûts à discuter</button></div>
@@ -279,8 +292,8 @@ const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
           <label>Fournisseur<input required minLength={2} value={form.vendor} onChange={(event) => setForm({ ...form, vendor: event.target.value })} placeholder="Ex. HubSpot" /></label>
           <label>Type / récurrence<select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value as PlannedExpense['kind'] })}><option value="monthly">Mensuelle</option><option value="quarterly">Trimestrielle</option><option value="yearly">Annuelle</option><option value="one_off">Unique</option></select></label>
           <label>Montant saisi (€)<input required inputMode="decimal" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} placeholder="120,00" /></label>
-          <label>Nature du montant<select value={form.taxMode} onChange={(event) => setForm({ ...form, taxMode: event.target.value as 'ht' | 'ttc' | 'reverse_charge' })}><option value="ht">Montant HT</option><option value="ttc">Montant TTC</option><option value="reverse_charge">TVA autoliquidée</option></select></label>
-          <label>Taux de TVA (%)<input required min="0" max="100" step="0.1" type="number" disabled={form.taxMode === 'ht'} value={form.vatRate} onChange={(event) => setForm({ ...form, vatRate: event.target.value })} /></label>
+          <label>Nature du montant<select value={form.taxMode} onChange={(event) => setForm({ ...form, taxMode: event.target.value as PlannedExpense['taxMode'] })}><option value="ht">Montant HT</option><option value="ttc">Montant TTC</option><option value="no_vat">Pas de TVA</option><option value="reverse_charge">TVA autoliquidée</option></select></label>
+          <label>Taux de TVA (%)<input required min="0" max="100" step="0.1" type="number" disabled={form.taxMode === 'ht' || form.taxMode === 'no_vat'} value={form.vatRate} onChange={(event) => setForm({ ...form, vatRate: event.target.value })} /></label>
           <label>Catégorie<select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}><option>Logiciels & abonnements</option><option>Marketing & acquisition</option><option>Infrastructure & hébergement</option><option>Prestataires & honoraires</option><option>Personnel</option><option>Locaux & fonctionnement</option><option>Banque & finance</option><option>Déplacements & repas</option><option>Taxes & administrations</option><option>Assurances</option><option>Autres dépenses</option></select></label>
           <label>Sous-catégorie<input required value={form.subcategory} onChange={(event) => setForm({ ...form, subcategory: event.target.value })} /></label>
           <label>{form.kind === 'one_off' ? 'Date prévue' : 'Première échéance'}<input required type="date" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></label>
@@ -288,7 +301,7 @@ const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
           <label>Décision<select value={form.active ? 'included' : 'discussing'} onChange={(event) => setForm({ ...form, active: event.target.value === 'included' })}><option value="included">Inclure dans le prévisionnel</option><option value="discussing">Mettre de côté · à discuter</option></select></label>
         </div>
         <label>Notes<textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="Contexte, hypothèse ou détail fiscal…" /></label>
-        <div className="tax-preview"><span>Montant retenu dans le prévisionnel</span><strong>{formatEUR(previewHtCents)} HT</strong><small>{form.taxMode === 'ttc' ? `Conversion du TTC avec ${form.vatRate || '0'} % de TVA` : form.taxMode === 'reverse_charge' ? 'TVA autoliquidée : coût conservé hors taxes' : 'Montant déjà saisi hors taxes'}</small></div>
+        <div className="tax-preview"><span>Montant retenu dans le prévisionnel</span><strong>{formatEUR(previewHtCents)} HT</strong><small>{form.taxMode === 'ttc' ? `Conversion du TTC avec ${form.vatRate || '0'} % de TVA` : form.taxMode === 'reverse_charge' ? 'TVA autoliquidée : coût conservé hors taxes' : form.taxMode === 'no_vat' ? 'Aucune TVA applicable : montant conservé tel quel' : 'Montant déjà saisi hors taxes'}</small></div>
         {formError && <p className="form-error">{formError}</p>}
         <div className="form-actions"><button className="button primary" disabled={saving}>{saving ? <Loader2 className="spin" size={17} /> : editingId ? <Pencil size={17} /> : <Plus size={17} />}{editingId ? ' Enregistrer les modifications' : ' Ajouter au prévisionnel'}</button>{editingId && <button type="button" className="button secondary" onClick={cancelEdit}><XCircle size={17} /> Annuler</button>}</div>
       </form>

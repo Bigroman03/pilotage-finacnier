@@ -29,7 +29,7 @@ type PlannedRow = {
   vendor: string;
   amount_cents: number;
   entered_amount_cents: number | null;
-  tax_mode: 'ht' | 'ttc' | 'reverse_charge';
+  tax_mode: 'ht' | 'ttc' | 'no_vat' | 'reverse_charge';
   vat_rate_basis_points: number;
   category: string;
   subcategory: string;
@@ -81,7 +81,7 @@ export const mapPlannedExpense = (row: PlannedRow): PlannedExpense => ({
 
 export const plannedAmountExcludingTax = (
   enteredAmountCents: number,
-  taxMode: 'ht' | 'ttc' | 'reverse_charge',
+  taxMode: 'ht' | 'ttc' | 'no_vat' | 'reverse_charge',
   vatRateBasisPoints: number,
 ) => taxMode === 'ttc'
   ? Math.round(enteredAmountCents / (1 + Math.max(0, vatRateBasisPoints) / 10_000))

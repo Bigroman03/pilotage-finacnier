@@ -1,5 +1,5 @@
 export type ExpenseKind = 'monthly' | 'quarterly' | 'yearly' | 'one_off';
-export type PlannedTaxMode = 'ht' | 'ttc' | 'reverse_charge';
+export type PlannedTaxMode = 'ht' | 'ttc' | 'no_vat' | 'reverse_charge';
 
 export type PlannedExpense = {
   id: number;
@@ -130,6 +130,13 @@ export type ForecastMonth = {
 };
 
 export type DashboardResponse = {
+  period: {
+    mode: 'day' | 'week' | 'month' | 'year' | 'custom';
+    bucket: 'day' | 'week' | 'month' | 'year';
+    from: string;
+    to: string;
+    label: string;
+  };
   connections: {
     qonto: boolean;
     stripe: boolean;
@@ -138,14 +145,22 @@ export type DashboardResponse = {
   };
   kpis: {
     cashBalanceCents: number;
-    currentMonthExpensesCents: number;
+    periodExpensesCents: number;
+    revenueHtCents: number;
     recurringMonthlyCents: number;
     plannedNext30DaysCents: number;
     stripeMrrCents: number;
     activeStripeSubscriptions: number;
   };
   topCategories: Array<{ name: string; valueCents: number }>;
-  cashflowMonths: CashflowMonth[];
+  trend: Array<{
+    key: string;
+    label: string;
+    inflowsCents: number;
+    outflowsCents: number;
+    revenueHtCents: number;
+    netCents: number;
+  }>;
   recentExpenses: ExpenseTransaction[];
   upcomingPlanned: PlannedExpense[];
 };
