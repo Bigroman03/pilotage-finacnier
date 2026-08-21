@@ -1,5 +1,8 @@
 import type Database from 'better-sqlite3';
-import type { ExpenseHierarchy, ExpenseTransaction, ForecastMonth, PlannedExpense, RecurringVendor } from '../shared/types.js';
+import type {
+  CashflowMonth, ExpenseHierarchy, ExpenseTransaction, FinancialSettings, ForecastMonth,
+  PlannedExpense, RecurringVendor, VendorRanking,
+} from '../shared/types.js';
 
 type TransactionRow = {
   id: string;
@@ -166,6 +169,80 @@ export const detectRecurringVendors = (db: Database.Database): RecurringVendor[]
     }];
   }).sort((a, b) => b.estimatedMonthlyCents - a.estimatedMonthlyCents);
 };
+
+export const rankVendors = (db: Database.Database): VendorRanking[] => {
+  const transactions = getExpenseTransactions(db);
+  const totalExpenses = transactions.reduce((sum, row) => sum + row.amountCents, 0);
+  const recurring = new Map(detectRecurringVendors(db).map((vendor) => [vendor.vendor, vendor]));
+  const groups = new Map<string, ExpenseTransaction[]>();
+  transactions.forEach((row) => groups.set(row.vendor, [...(groups.get(row.vendor) || []), row]));
+
+  return Array.from(groups.entries()).map(([vendor, rows]) => {
+    const sorted = [...rows].sort((a, b) => b.date.localeCompare(a.date));
+    const latest = sorted[0];
+    const totalCents = rows.reduce((sum, row) => sum + row.amountCents, 0);
+    const recurringVendor = recurring.get(vendor);
+    return {
+      rank: 0,
+      vendor,
+      category: latest.category,
+      subcategory: latest.subcategory,
+      totalCents,
+      averageTransactionCents: Math.round(totalCents / rows.length),
+      transactionCount: rows.length,
+      activeMonths: new Set(rows.map((row) => monthKey(row.date))).size,
+      lastSeenAt: latest.date,
+      sharePercent: totalExpenses ? Math.round((totalCents / totalExpenses) * 10_000) / 100 : 0,
+      recurring: Boolean(recurringVendor),
+      estimatedMonthlyCents: recurringVendor?.estimatedMonthlyCents || null,
+    };
+  }).sort((a, b) => b.totalCents - a.totalCents).map((vendor, index) => ({ ...vendor, rank: index + 1 }));
+};
+
+const addCalendarMonths = (date: Date, count: number) => new Date(date.getFullYear(), date.getMonth() + count, 1);
+
+export const getCashflowMonths = (db: Database.Database, count = 6, now = new Date()): CashflowMonth[] => {
+  const monthCount = Math.min(24, Math.max(1, Math.floor(count)));
+  const start = addCalendarMonths(new Date(now.getFullYear(), now.getMonth(), 1), -(monthCount - 1));
+  const rows = db.prepare(`SELECT date, side, amount_cents FROM transactions
+    WHERE status = 'completed' AND currency = 'EUR' AND date >= ? ORDER BY date ASC`)
+    .all(start.toISOString()) as Array<{ date: string; side: 'credit' | 'debit'; amount_cents: number }>;
+  const totals = new Map<string, { inflowsCents: number; outflowsCents: number }>();
+  rows.forEach((row) => {
+    const key = monthKey(row.date);
+    const current = totals.get(key) || { inflowsCents: 0, outflowsCents: 0 };
+    if (row.side === 'credit') current.inflowsCents += row.amount_cents;
+    else current.outflowsCents += row.amount_cents;
+    totals.set(key, current);
+  });
+
+  return Array.from({ length: monthCount }, (_, index) => {
+    const month = addCalendarMonths(start, index);
+    const key = localMonthKey(month);
+    const values = totals.get(key) || { inflowsCents: 0, outflowsCents: 0 };
+    return {
+      key,
+      label: month.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }),
+      ...values,
+      netCents: values.inflowsCents - values.outflowsCents,
+    };
+  });
+};
+
+export const getFinancialSettings = (db: Database.Database): FinancialSettings => {
+  const row = db.prepare('SELECT * FROM financial_settings WHERE id = 1').get() as {
+    receivables_cents: number; inventory_cents: number; supplier_debts_cents: number; updated_at: string;
+  } | undefined;
+  return {
+    receivablesCents: row?.receivables_cents || 0,
+    inventoryCents: row?.inventory_cents || 0,
+    supplierDebtsCents: row?.supplier_debts_cents || 0,
+    updatedAt: row?.updated_at || null,
+  };
+};
+
+export const calculateBfr = (settings: Pick<FinancialSettings, 'receivablesCents' | 'inventoryCents' | 'supplierDebtsCents'>) =>
+  settings.receivablesCents + settings.inventoryCents - settings.supplierDebtsCents;
 
 export const listPlannedExpenses = (db: Database.Database) =>
   (db.prepare('SELECT * FROM planned_expenses ORDER BY active DESC, start_date ASC, amount_cents DESC').all() as PlannedRow[]).map(mapPlannedExpense);

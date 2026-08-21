@@ -8,12 +8,14 @@ Application locale de pilotage financier connectée en lecture seule à Qonto et
 - répertoire complet des dépenses avec la hiérarchie : catégorie → sous-catégorie → fournisseur → opération ;
 - filtres par période et recherche libre ;
 - catégorisation automatique à partir du fournisseur et des catégories Qonto ;
+- classement global des fournisseurs par dépenses cumulées, poids et fréquence ;
 - détection des fournisseurs récurrents et estimation de leur coût mensuel ;
-- onglet dédié aux fournisseurs et abonnements mensuels ;
+- graphique comparatif des gains et pertes constatés sur Qonto ;
 - ajout de dépenses futures mensuelles ou uniques ;
 - date de début, date de fin facultative, catégorie, fournisseur et notes ;
 - prévision des dépenses et de la trésorerie sur douze mois ;
-- récupération du MRR et du nombre d’abonnements Stripe actifs ;
+- récupération du MRR HT, de l’ARR HT et du nombre d’abonnements Stripe actifs ;
+- onglet KPI avec flux net, burn rate, runway, couverture des charges fixes et BFR simplifié ;
 - stockage local dans SQLite ;
 - aucune clé Qonto ou Stripe dans le navigateur.
 
@@ -61,8 +63,7 @@ Créer une **Restricted API Key** Stripe avec uniquement les permissions de lect
 
 - Subscriptions — Read ;
 - Prices — Read ;
-- Products — Read ;
-- Customers — Read.
+- Products — Read.
 
 Puis renseigner `STRIPE_RESTRICTED_KEY` dans `.env`.
 
@@ -72,15 +73,32 @@ Ne jamais utiliser une clé secrète complète si une clé restreinte suffit, et
 
 1. Aller dans **Connexions** et synchroniser Qonto puis Stripe.
 2. Vérifier la hiérarchie dans **Toutes les dépenses**.
-3. Contrôler les détections dans **Fournisseurs mensuels**.
+3. Contrôler le classement et les détections dans **Fournisseurs**.
 4. Ajouter les dépenses futures dans **Prévisionnel** en indiquant si elles sont uniques ou mensuelles et leur date de début.
+5. Renseigner les créances, stocks et dettes fournisseurs dans **KPI’s** pour calculer le BFR simplifié.
+
+## MRR hors taxes
+
+Le MRR Stripe est calculé à partir des abonnements actifs, hors périodes d’essai, et des prix récurrents normalisés au mois. Les prix déclarés hors taxes sont conservés tels quels. Pour un prix déclaré taxes incluses, l’application retire les taux de taxe inclusive présents sur l’abonnement. Si Stripe ne fournit aucun taux applicable, le prix est conservé sans inventer un taux de TVA.
+
+## KPI et BFR
+
+Les encaissements et décaissements correspondent aux flux bancaires Qonto terminés. Ils ne doivent pas être confondus avec un compte de résultat comptable.
+
+Le BFR simplifié applique la formule :
+
+```text
+BFR = créances clients + stocks et en-cours − dettes fournisseurs
+```
+
+Ces trois montants sont saisis manuellement dans l’application, car Qonto et Stripe ne suffisent pas à reconstituer un BFR comptable certifié.
 
 ## Prévisionnel
 
 La projection actuelle applique la formule :
 
 ```text
-solde projeté = solde Qonto + MRR Stripe − fournisseurs récurrents Qonto − dépenses futures ajoutées
+solde projeté = solde Qonto + MRR Stripe HT − fournisseurs récurrents Qonto − dépenses futures ajoutées
 ```
 
 Il s’agit d’une aide au pilotage, pas d’une prévision comptable certifiée. Les montants récurrents détectés automatiquement doivent être validés.
@@ -100,4 +118,3 @@ Ouvrir [http://127.0.0.1:3001](http://127.0.0.1:3001). Le volume `pilotage_data`
 npm test
 npm run build
 ```
-

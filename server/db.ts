@@ -96,6 +96,25 @@ const migrate = (db: Database.Database) => {
       synced_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS stripe_metric_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mrr_cents INTEGER NOT NULL,
+      arr_cents INTEGER NOT NULL,
+      active_subscriptions INTEGER NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      synced_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_stripe_metric_history_synced_at ON stripe_metric_history(synced_at DESC);
+
+    CREATE TABLE IF NOT EXISTS financial_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      receivables_cents INTEGER NOT NULL DEFAULT 0 CHECK (receivables_cents >= 0),
+      inventory_cents INTEGER NOT NULL DEFAULT 0 CHECK (inventory_cents >= 0),
+      supplier_debts_cents INTEGER NOT NULL DEFAULT 0 CHECK (supplier_debts_cents >= 0),
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS sync_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source TEXT NOT NULL,
@@ -112,4 +131,3 @@ export const closeDatabase = () => {
   database?.close();
   database = null;
 };
-

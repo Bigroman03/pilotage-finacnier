@@ -63,6 +63,55 @@ export type RecurringVendor = {
   confidence: 'medium' | 'high';
 };
 
+export type VendorRanking = {
+  rank: number;
+  vendor: string;
+  category: string;
+  subcategory: string;
+  totalCents: number;
+  averageTransactionCents: number;
+  transactionCount: number;
+  activeMonths: number;
+  lastSeenAt: string;
+  sharePercent: number;
+  recurring: boolean;
+  estimatedMonthlyCents: number | null;
+};
+
+export type CashflowMonth = {
+  key: string;
+  label: string;
+  inflowsCents: number;
+  outflowsCents: number;
+  netCents: number;
+};
+
+export type FinancialSettings = {
+  receivablesCents: number;
+  inventoryCents: number;
+  supplierDebtsCents: number;
+  updatedAt: string | null;
+};
+
+export type FinancialKpiResponse = {
+  settings: FinancialSettings;
+  metrics: {
+    cashBalanceCents: number;
+    mrrHtCents: number;
+    arrHtCents: number;
+    currentMonthInflowsCents: number;
+    currentMonthOutflowsCents: number;
+    currentMonthNetCents: number;
+    averageMonthlyOutflowsCents: number;
+    recurringCostsCents: number;
+    burnRateCents: number;
+    runwayMonths: number | null;
+    bfrCents: number;
+    recurringCoveragePercent: number | null;
+  };
+  cashflowMonths: CashflowMonth[];
+};
+
 export type ForecastMonth = {
   key: string;
   label: string;
@@ -90,7 +139,7 @@ export type DashboardResponse = {
     activeStripeSubscriptions: number;
   };
   topCategories: Array<{ name: string; valueCents: number }>;
+  cashflowMonths: CashflowMonth[];
   recentExpenses: ExpenseTransaction[];
   upcomingPlanned: PlannedExpense[];
 };
-

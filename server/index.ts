@@ -7,10 +7,14 @@ import { getDatabase } from './db.js';
 import {
   buildExpenseHierarchy,
   buildForecast,
+  calculateBfr,
   detectRecurringVendors,
+  getCashflowMonths,
   getExpenseTransactions,
+  getFinancialSettings,
   listPlannedExpenses,
   mapPlannedExpense,
+  rankVendors,
 } from './analytics.js';
 import { EXPENSE_CATEGORIES } from './classification.js';
 import { isQontoConfigured, syncQonto } from './qonto.js';
@@ -84,6 +88,18 @@ app.get('/api/vendors/recurring', (_req, res) => {
   });
 });
 
+app.get('/api/vendors', (_req, res) => {
+  const vendors = rankVendors(db);
+  const recurring = detectRecurringVendors(db);
+  res.json({
+    totalExpenseCents: vendors.reduce((sum, vendor) => sum + vendor.totalCents, 0),
+    recurringMonthlyCents: recurring.reduce((sum, vendor) => sum + vendor.estimatedMonthlyCents, 0),
+    recurringCount: recurring.length,
+    vendors,
+    recurringVendors: recurring,
+  });
+});
+
 app.patch('/api/vendors/:vendor', (req, res) => {
   const schema = z.object({
     displayName: z.string().trim().min(2).max(120).nullable().optional(),
@@ -136,6 +152,57 @@ app.delete('/api/planned-expenses/:id', (req, res) => {
   return res.status(204).send();
 });
 
+app.get('/api/kpis', (_req, res) => {
+  const settings = getFinancialSettings(db);
+  const cashflowMonths = getCashflowMonths(db, 7);
+  const current = cashflowMonths.at(-1)!;
+  const completedMonths = cashflowMonths.slice(-4, -1);
+  const referenceMonths = completedMonths.some((month) => month.inflowsCents || month.outflowsCents)
+    ? completedMonths
+    : [current];
+  const averageInflowsCents = Math.round(referenceMonths.reduce((sum, month) => sum + month.inflowsCents, 0) / referenceMonths.length);
+  const averageMonthlyOutflowsCents = Math.round(referenceMonths.reduce((sum, month) => sum + month.outflowsCents, 0) / referenceMonths.length);
+  const burnRateCents = Math.max(0, averageMonthlyOutflowsCents - averageInflowsCents);
+  const cashBalanceCents = (db.prepare("SELECT COALESCE(SUM(balance_cents), 0) value FROM bank_accounts WHERE currency='EUR'").get() as { value: number }).value;
+  const stripe = db.prepare('SELECT * FROM stripe_metrics WHERE id=1').get() as { mrr_cents: number; arr_cents: number } | undefined;
+  const recurringCostsCents = detectRecurringVendors(db).reduce((sum, vendor) => sum + vendor.estimatedMonthlyCents, 0);
+  const mrrHtCents = stripe?.mrr_cents || 0;
+
+  res.json({
+    settings,
+    metrics: {
+      cashBalanceCents,
+      mrrHtCents,
+      arrHtCents: stripe?.arr_cents || mrrHtCents * 12,
+      currentMonthInflowsCents: current.inflowsCents,
+      currentMonthOutflowsCents: current.outflowsCents,
+      currentMonthNetCents: current.netCents,
+      averageMonthlyOutflowsCents,
+      recurringCostsCents,
+      burnRateCents,
+      runwayMonths: burnRateCents > 0 ? Math.round((cashBalanceCents / burnRateCents) * 10) / 10 : null,
+      bfrCents: calculateBfr(settings),
+      recurringCoveragePercent: recurringCostsCents > 0 ? Math.round((mrrHtCents / recurringCostsCents) * 1000) / 10 : null,
+    },
+    cashflowMonths: cashflowMonths.slice(-6),
+  });
+});
+
+app.put('/api/kpis/settings', (req, res) => {
+  const value = z.object({
+    receivablesCents: z.coerce.number().int().min(0).max(100_000_000_000),
+    inventoryCents: z.coerce.number().int().min(0).max(100_000_000_000),
+    supplierDebtsCents: z.coerce.number().int().min(0).max(100_000_000_000),
+  }).parse(req.body);
+  const updatedAt = new Date().toISOString();
+  db.prepare(`INSERT INTO financial_settings(id, receivables_cents, inventory_cents, supplier_debts_cents, updated_at)
+    VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET receivables_cents=excluded.receivables_cents,
+    inventory_cents=excluded.inventory_cents, supplier_debts_cents=excluded.supplier_debts_cents,
+    updated_at=excluded.updated_at`)
+    .run(value.receivablesCents, value.inventoryCents, value.supplierDebtsCents, updatedAt);
+  res.json({ settings: getFinancialSettings(db) });
+});
+
 app.get('/api/forecast', (req, res) => {
   const months = Math.min(24, Math.max(1, Number(req.query.months || 12)));
   const cashBalanceCents = (db.prepare("SELECT COALESCE(SUM(balance_cents), 0) value FROM bank_accounts WHERE currency='EUR'").get() as { value: number }).value;
@@ -183,6 +250,7 @@ app.get('/api/dashboard', (_req, res) => {
       activeStripeSubscriptions: stripe?.active_subscriptions || 0,
     },
     topCategories: hierarchy.slice(0, 7).map((category) => ({ name: category.category, valueCents: category.totalCents })),
+    cashflowMonths: getCashflowMonths(db, 6),
     recentExpenses: allExpenses.slice(0, 8),
     upcomingPlanned: upcoming,
   });
@@ -205,4 +273,3 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 app.listen(port, host, () => {
   console.log(`Pilotage financier disponible sur http://${host}:${port}`);
 });
-
