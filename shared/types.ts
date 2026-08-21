@@ -193,6 +193,10 @@ export type StripeClient = {
 };
 
 export type ClientsResponse = {
+  sync: {
+    configured: boolean;
+    lastRun: { status: string; completedAt: string | null; message: string | null } | null;
+  };
   summary: {
     activeClientCount: number;
     activeSubscriptionCount: number;

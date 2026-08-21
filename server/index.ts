@@ -105,6 +105,8 @@ app.get('/api/vendors', (_req, res) => {
 });
 
 app.get('/api/clients', (_req, res) => {
+  const lastRun = db.prepare(`SELECT status, completed_at, message FROM sync_runs
+    WHERE source = 'stripe' ORDER BY id DESC LIMIT 1`).get() as { status: string; completed_at: string | null; message: string | null } | undefined;
   const rows = db.prepare(`SELECT * FROM stripe_customers
     ORDER BY lifetime_spend_ht_cents DESC, current_mrr_ht_cents DESC, name COLLATE NOCASE`).all() as any[];
   const offers = db.prepare(`SELECT * FROM stripe_customer_offers
@@ -139,6 +141,10 @@ app.get('/api/clients', (_req, res) => {
   const lifetimeSpendHtCents = clients.reduce((sum, client) => sum + client.lifetimeSpendHtCents, 0);
   const paidInvoiceCount = clients.reduce((sum, client) => sum + client.paidInvoiceCount, 0);
   res.json({
+    sync: {
+      configured: isStripeConfigured(),
+      lastRun: lastRun ? { status: lastRun.status, completedAt: lastRun.completed_at, message: lastRun.message } : null,
+    },
     summary: {
       activeClientCount: clients.length,
       activeSubscriptionCount: clients.reduce((sum, client) => sum + client.activeSubscriptionCount, 0),
