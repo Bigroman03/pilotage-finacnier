@@ -1,0 +1,18 @@
+services:
+  pilotage:
+    build: .
+    ports:
+      - "127.0.0.1:3001:3001"
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3001
+      DATA_DIR: /app/data
+    volumes:
+      - pilotage_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  pilotage_data:
+
