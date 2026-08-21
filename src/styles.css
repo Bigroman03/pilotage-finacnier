@@ -64,6 +64,15 @@ header h1 { margin: 4px 0 0; font: 800 28px/1.2 'Manrope', sans-serif; color: va
 .kpi strong { font: 800 25px/1.25 'Manrope', sans-serif; color: var(--green-950); margin-top: 20px; }
 .kpi small { color: var(--muted); margin-top: auto; padding-top: 8px; }
 .financial-grid { grid-template-columns: repeat(4, minmax(210px, 1fr)); }
+.vendor-pie-layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .6fr); align-items: center; gap: 18px; }
+.pie-ranking { margin: 0; padding: 0; list-style: none; counter-reset: vendor-rank; }
+.pie-ranking li { counter-increment: vendor-rank; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.pie-ranking li:last-child { border-bottom: 0; }
+.pie-ranking li span { display: flex; min-width: 0; align-items: center; gap: 8px; color: #405149; }
+.pie-ranking li span::before { content: counter(vendor-rank); width: 20px; color: var(--muted); font-weight: 800; }
+.pie-ranking li i { flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; }
+.pie-ranking li strong { white-space: nowrap; color: var(--green-950); }
+.empty-tab { min-height: 340px; }
 .two-columns { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(330px, .75fr); gap: 20px; }
 .three-columns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .section-title { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 18px; }
@@ -239,6 +248,7 @@ textarea { min-height: 78px; resize: vertical; }
   .dashboard-kpis { grid-template-columns: repeat(3, 1fr); }
   .financial-grid { grid-template-columns: repeat(3, 1fr); }
   .two-columns { grid-template-columns: 1fr; }
+  .vendor-pie-layout { grid-template-columns: 1fr; }
   .budget-month-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 900px) {

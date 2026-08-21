@@ -6,7 +6,7 @@ import {
   Trophy, Users, WalletCards, XCircle,
 } from 'lucide-react';
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import type {
   ClientsResponse, DashboardResponse, ExpenseHierarchy, FinancialKpiResponse, ForecastMonth, PlannedExpense,
@@ -68,7 +68,64 @@ const KpiCard = ({ icon: Icon, label, value, detail, tone }: {
   icon: typeof WalletCards; label: string; value: string; detail: string; tone?: 'good' | 'bad';
 }) => <div className={`card kpi ${tone || ''}`}><div className="kpi-head"><span>{label}</span><Icon size={18} /></div><strong>{value}</strong><small>{detail}</small></div>;
 
-const Dashboard = ({ refreshKey }: { refreshKey: number }) => {
+const euroInputToCents = (value: string) => Math.round(Number(value.replace(',', '.') || 0) * 100);
+
+const FinancialKpiSection = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) => {
+  const { data, error, loading } = useRemote<FinancialKpiResponse>('/api/kpis', refreshKey);
+  const [form, setForm] = useState({ receivables: '0', inventory: '0', supplierDebts: '0' });
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  useEffect(() => {
+    if (!data) return;
+    setForm({
+      receivables: String(data.settings.receivablesCents / 100),
+      inventory: String(data.settings.inventoryCents / 100),
+      supplierDebts: String(data.settings.supplierDebtsCents / 100),
+    });
+  }, [data]);
+  const save = async (event: FormEvent) => {
+    event.preventDefault(); setSaving(true); setFormError('');
+    try {
+      await api('/api/kpis/settings', { method: 'PUT', body: JSON.stringify({
+        receivablesCents: euroInputToCents(form.receivables),
+        inventoryCents: euroInputToCents(form.inventory),
+        supplierDebtsCents: euroInputToCents(form.supplierDebts),
+      }) });
+      onChanged();
+    } catch (reason) { setFormError(reason instanceof Error ? reason.message : 'Erreur'); }
+    finally { setSaving(false); }
+  };
+  if (loading) return <Loading />;
+  if (error || !data) return <ErrorState message={error} />;
+  const metrics = data.metrics;
+  const coverage = metrics.recurringCoveragePercent === null ? '—' : `${metrics.recurringCoveragePercent.toLocaleString('fr-FR')} %`;
+  const runway = metrics.runwayMonths === null ? 'Pas de burn' : `${metrics.runwayMonths.toLocaleString('fr-FR')} mois`;
+  return <>
+    <section><div className="section-title"><div><h2>Indicateurs financiers</h2><p>Les KPI essentiels sont désormais réunis dans la vue d’ensemble.</p></div></div>
+      <div className="kpi-grid financial-grid">
+        <KpiCard icon={CircleDollarSign} label="MRR HT" value={formatEUR(metrics.mrrHtCents)} detail="Revenu récurrent mensuel Stripe hors taxes" tone="good" />
+        <KpiCard icon={ArrowUpCircle} label="ARR HT" value={formatEUR(metrics.arrHtCents)} detail="MRR HT × 12" tone="good" />
+        <KpiCard icon={Scale} label="BFR simplifié" value={formatEUR(metrics.bfrCents)} detail="Créances + stocks − dettes fournisseurs" />
+        <KpiCard icon={Activity} label="Flux net du mois" value={formatEUR(metrics.currentMonthNetCents)} detail={`${formatEUR(metrics.currentMonthInflowsCents)} encaissés · ${formatEUR(metrics.currentMonthOutflowsCents)} décaissés`} tone={metrics.currentMonthNetCents >= 0 ? 'good' : 'bad'} />
+        <KpiCard icon={TrendingDown} label="Burn rate" value={formatEUR(metrics.burnRateCents)} detail="Déficit mensuel moyen sur les mois terminés" tone={metrics.burnRateCents > 0 ? 'bad' : 'good'} />
+        <KpiCard icon={Timer} label="Runway" value={runway} detail="Trésorerie ÷ burn rate mensuel" />
+        <KpiCard icon={PiggyBank} label="Dépenses moyennes" value={formatEUR(metrics.averageMonthlyOutflowsCents)} detail="Décaissements mensuels moyens Qonto" />
+        <KpiCard icon={Gauge} label="Couverture des charges fixes" value={coverage} detail={`${formatEUR(metrics.recurringCostsCents)} de fournisseurs récurrents`} />
+      </div>
+    </section>
+    <div className="two-columns kpi-settings-layout">
+      <section className="card"><div className="section-title"><div><h2>Paramètres du BFR</h2><p>Renseigne les montants comptables actuels pour obtenir une estimation utile.</p></div></div><form className="expense-form" onSubmit={save}>
+        <label>Créances clients à recevoir (€)<input required min="0" type="number" step="0.01" value={form.receivables} onChange={(event) => setForm({ ...form, receivables: event.target.value })} /></label>
+        <label>Stocks et en-cours (€)<input required min="0" type="number" step="0.01" value={form.inventory} onChange={(event) => setForm({ ...form, inventory: event.target.value })} /></label>
+        <label>Dettes fournisseurs à payer (€)<input required min="0" type="number" step="0.01" value={form.supplierDebts} onChange={(event) => setForm({ ...form, supplierDebts: event.target.value })} /></label>
+        {formError && <p className="form-error">{formError}</p>}<button className="button primary" disabled={saving}>{saving ? <Loader2 className="spin" size={17} /> : <RefreshCw size={17} />} Mettre à jour le BFR</button>
+      </form></section>
+      <section className="card kpi-explainer"><div className="section-title"><div><h2>Lecture rapide</h2><p>Les indicateurs à surveiller en priorité.</p></div></div><div className="definition-list"><div><strong>BFR</strong><span>Besoin de trésorerie créé par le décalage entre encaissements clients et paiements fournisseurs.</span></div><div><strong>Burn rate</strong><span>Montant de trésorerie consommé chaque mois lorsque les sorties dépassent les entrées.</span></div><div><strong>Runway</strong><span>Nombre estimé de mois avant épuisement de la trésorerie au rythme de consommation actuel.</span></div><div><strong>Couverture</strong><span>Part des dépenses récurrentes fournisseurs couverte par le MRR HT.</span></div></div><p className="data-caution">Le BFR affiché est simplifié et dépend des montants saisis. Il ne remplace pas le calcul de ton expert-comptable.</p></section>
+    </div>
+  </>;
+};
+
+const Dashboard = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) => {
   const today = new Date().toISOString().slice(0, 10);
   const defaultFrom = `${new Date().getFullYear()}-01-01`;
   const [periodMode, setPeriodMode] = useState<DashboardResponse['period']['mode']>('month');
@@ -103,14 +160,10 @@ const Dashboard = ({ refreshKey }: { refreshKey: number }) => {
     <section className="card chart-card"><div className="section-title"><div><h2>Gains, pertes et chiffre d’affaires HT</h2><p>{data.period.label} · regroupement {data.period.bucket === 'day' ? 'journalier' : data.period.bucket === 'week' ? 'hebdomadaire' : data.period.bucket === 'month' ? 'mensuel' : 'annuel'}</p></div></div>
       <ResponsiveContainer width="100%" height={330}><BarChart data={cashflowChart} barGap={4}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="name" /><YAxis tickFormatter={(value) => `${Math.round(value / 100)} €`} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Legend /><Bar dataKey="gains" name="Encaissements Qonto" fill="#2f765d" radius={[6, 6, 0, 0]} /><Bar dataKey="caHt" name="CA HT Stripe" fill="#5c79a9" radius={[6, 6, 0, 0]} /><Bar dataKey="pertes" name="Décaissements Qonto" fill="#d87a53" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer>
     </section>
-    <div className="two-columns">
-      <section className="card chart-card"><div className="section-title"><div><h2>Dépenses par grande catégorie</h2><p>{data.period.label}</p></div></div>
+    <section className="card chart-card"><div className="section-title"><div><h2>Dépenses par grande catégorie</h2><p>{data.period.label}</p></div></div>
         {chart.length ? <ResponsiveContainer width="100%" height={310}><BarChart data={chart} layout="vertical" margin={{ left: 20, right: 20 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} /><XAxis type="number" tickFormatter={(value) => `${Math.round(value / 100)} €`} /><YAxis type="category" dataKey="name" width={145} tick={{ fontSize: 11 }} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Bar dataKey="value" name="Dépenses" fill="#d87a53" radius={[0, 6, 6, 0]} /></BarChart></ResponsiveContainer> : <Empty>Aucune dépense synchronisée.</Empty>}
-      </section>
-      <section className="card"><div className="section-title"><div><h2>Prochaines dépenses prévues</h2><p>Échéances saisies manuellement</p></div></div>
-        {data.upcomingPlanned.length ? <div className="compact-list">{data.upcomingPlanned.map((expense) => <div key={expense.id} className="compact-row"><div><strong>{expense.label}</strong><span>{expense.vendor} · {expenseKindLabel(expense.kind)}</span></div><div className="right"><strong>{formatEUR(expense.amountCents)}</strong><span>{formatDate(expense.startDate)}</span></div></div>)}</div> : <Empty>Aucune dépense future enregistrée.</Empty>}
-      </section>
-    </div>
+    </section>
+    <FinancialKpiSection refreshKey={refreshKey} onChanged={onChanged} />
     <section className="card"><div className="section-title"><div><h2>Dernières dépenses Qonto de la période</h2><p>{data.period.label} · importées et classées automatiquement</p></div></div>
       {data.recentExpenses.length ? <div className="table-wrap"><table><thead><tr><th>Date</th><th>Fournisseur</th><th>Catégorie</th><th>Libellé</th><th className="amount">Montant</th></tr></thead><tbody>{data.recentExpenses.map((expense) => <tr key={expense.id}><td>{formatDate(expense.date)}</td><td><strong>{expense.vendor}</strong></td><td><span className="tag">{expense.category}</span></td><td>{expense.label}</td><td className="amount expense">−{formatEUR(expense.amountCents)}</td></tr>)}</tbody></table></div> : <Empty>Aucune dépense synchronisée.</Empty>}
     </section>
@@ -142,15 +195,18 @@ const Vendors = ({ refreshKey }: { refreshKey: number }) => {
   const { data, error, loading } = useRemote<VendorsResponse>('/api/vendors', refreshKey);
   if (loading) return <Loading />;
   if (error || !data) return <ErrorState message={error} />;
-  const topChart = data.vendors.slice(0, 10).map((vendor) => ({ name: vendor.vendor, value: vendor.totalCents }));
+  const pieHead = data.vendors.slice(0, 8).map((vendor) => ({ name: vendor.vendor, value: vendor.totalCents }));
+  const otherVendorsCents = data.vendors.slice(8).reduce((sum, vendor) => sum + vendor.totalCents, 0);
+  const pieData = otherVendorsCents > 0 ? [...pieHead, { name: 'Autres fournisseurs', value: otherVendorsCents }] : pieHead;
+  const pieColors = ['#1f5b45', '#2f765d', '#55937a', '#83b09b', '#d87a53', '#e69a74', '#efb595', '#cab578', '#b7bdb7'];
   return <div className="page-stack">
     <div className="three-columns">
       <KpiCard icon={Building2} label="Total fournisseurs" value={formatEUR(data.totalExpenseCents)} detail={`${data.vendors.length} fournisseur(s) classé(s)`} />
       <KpiCard icon={RefreshCw} label="Coût récurrent mensuel" value={formatEUR(data.recurringMonthlyCents)} detail={`${data.recurringCount} abonnement(s) détecté(s)`} />
       <KpiCard icon={Trophy} label="Premier fournisseur" value={data.vendors[0]?.vendor || '—'} detail={data.vendors[0] ? formatEUR(data.vendors[0].totalCents) : 'Aucune dépense'} />
     </div>
-    <section className="card chart-card"><div className="section-title"><div><h2>Top dépenses fournisseurs</h2><p>Classement cumulé sur tout l’historique Qonto synchronisé</p></div></div>
-      {topChart.length ? <ResponsiveContainer width="100%" height={Math.max(330, topChart.length * 42)}><BarChart data={topChart} layout="vertical" margin={{ left: 25, right: 25 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} /><XAxis type="number" tickFormatter={(value) => `${Math.round(value / 100)} €`} /><YAxis type="category" dataKey="name" width={155} tick={{ fontSize: 11 }} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Bar dataKey="value" name="Dépenses cumulées" fill="#d87a53" radius={[0, 6, 6, 0]} /></BarChart></ResponsiveContainer> : <Empty>Aucun fournisseur synchronisé.</Empty>}
+    <section className="card chart-card"><div className="section-title"><div><h2>Répartition des coûts fournisseurs</h2><p>Du plus gros coût au plus petit sur tout l’historique Qonto synchronisé</p></div></div>
+      {pieData.length ? <div className="vendor-pie-layout"><ResponsiveContainer width="100%" height={390}><PieChart><Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={72} outerRadius={142} paddingAngle={1.5}>{pieData.map((entry, index) => <Cell key={entry.name} fill={pieColors[index % pieColors.length]} />)}</Pie><Tooltip formatter={(value) => formatEUR(Number(value))} /></PieChart></ResponsiveContainer><ol className="pie-ranking">{pieData.map((vendor, index) => <li key={vendor.name}><span><i style={{ background: pieColors[index % pieColors.length] }} />{vendor.name}</span><strong>{formatEUR(vendor.value)}</strong></li>)}</ol></div> : <Empty>Aucun fournisseur synchronisé.</Empty>}
     </section>
     <section className="card"><div className="section-title"><div><h2>Classement complet</h2><p>Montant cumulé, poids dans les dépenses et fréquence.</p></div></div>
       {data.vendors.length ? <div className="table-wrap"><table><thead><tr><th>Rang</th><th>Fournisseur</th><th>Hiérarchie</th><th className="amount">Dépenses</th><th className="amount">Part</th><th className="amount">Opérations</th><th>Dernière dépense</th><th>Récurrent</th></tr></thead><tbody>{data.vendors.map((vendor) => <tr key={vendor.vendor}><td><span className={`rank rank-${vendor.rank}`}>{vendor.rank}</span></td><td><strong>{vendor.vendor}</strong></td><td><span className="tag">{vendor.category}</span><small className="block">{vendor.subcategory}</small></td><td className="amount"><strong>{formatEUR(vendor.totalCents)}</strong><small className="block">Moy. {formatEUR(vendor.averageTransactionCents)}</small></td><td className="amount">{vendor.sharePercent.toLocaleString('fr-FR', { maximumFractionDigits: 2 })} %</td><td className="amount">{vendor.transactionCount} sur {vendor.activeMonths} mois</td><td>{formatDate(vendor.lastSeenAt)}</td><td>{vendor.recurring ? <span className="confidence high">Oui · {formatEUR(vendor.estimatedMonthlyCents || 0)}/mois</span> : <span className="tag subtle">Non détecté</span>}</td></tr>)}</tbody></table></div> : <Empty>Aucun fournisseur synchronisé.</Empty>}
@@ -179,8 +235,9 @@ const Clients = ({ refreshKey }: { refreshKey: number }) => {
       <KpiCard icon={Scale} label="Facture moyenne HT" value={formatEUR(data.summary.averageInvoiceHtCents)} detail="CA HT ÷ factures payées" />
     </div>
     <div className="notice security"><Database size={18} /><span>Les noms et emails clients restent dans la base SQLite locale. Ils ne sont jamais enregistrés dans GitHub.</span></div>
+    {!data.clients.length && <div className="notice"><CircleDollarSign size={18} /><span>{data.sync.lastRun?.status === 'error' ? data.sync.lastRun.message : 'Aucun abonnement actif importé. Lance « Synchroniser maintenant » dans Connexions. La permission Stripe Subscriptions en lecture est indispensable.'}</span></div>}
     <section className="card chart-card"><div className="section-title"><div><h2>Top clients par chiffre d’affaires</h2><p>Classement sur les factures Stripe payées, montants hors taxes</p></div></div>
-      {topChart.length ? <ResponsiveContainer width="100%" height={Math.max(330, topChart.length * 42)}><BarChart data={topChart} layout="vertical" margin={{ left: 25, right: 25 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} /><XAxis type="number" tickFormatter={(value) => `${Math.round(value / 100)} €`} /><YAxis type="category" dataKey="name" width={155} tick={{ fontSize: 11 }} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Bar dataKey="value" name="CA encaissé HT" fill="#2f765d" radius={[0, 6, 6, 0]} /></BarChart></ResponsiveContainer> : <Empty>Synchronise Stripe pour afficher les clients mensuels.</Empty>}
+      {topChart.length ? <ResponsiveContainer width="100%" height={Math.max(330, topChart.length * 42)}><BarChart data={topChart} layout="vertical" margin={{ left: 25, right: 25 }}><CartesianGrid strokeDasharray="3 3" horizontal={false} /><XAxis type="number" tickFormatter={(value) => `${Math.round(value / 100)} €`} /><YAxis type="category" dataKey="name" width={155} tick={{ fontSize: 11 }} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Bar dataKey="value" name="CA encaissé HT" fill="#2f765d" radius={[0, 6, 6, 0]} /></BarChart></ResponsiveContainer> : <Empty>Les clients apparaîtront ici après la synchronisation des abonnements Stripe actifs.</Empty>}
     </section>
     <section className="card"><div className="section-title"><div><h2>Classement clients</h2><p>Offres actives, MRR HT et historique des factures payées.</p></div></div>
       <div className="toolbar client-toolbar"><div className="search-box"><Search size={18} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Rechercher un client ou une offre…" /></div></div>
@@ -312,9 +369,9 @@ const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
   </div>;
 };
 
-const euroInputToCents = (value: string) => Math.round(Number(value.replace(',', '.') || 0) * 100);
+const FinancialKpis = () => <div className="card empty-tab"><Empty>Les KPI financiers sont désormais affichés dans la Vue d’ensemble.</Empty></div>;
 
-const FinancialKpis = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) => {
+const LegacyFinancialKpis = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) => {
   const { data, error, loading } = useRemote<FinancialKpiResponse>('/api/kpis', refreshKey);
   const [form, setForm] = useState({ receivables: '0', inventory: '0', supplierDebts: '0' });
   const [saving, setSaving] = useState(false);
@@ -376,7 +433,7 @@ const Connections = ({ refreshKey, onChanged }: { refreshKey: number; onChanged:
   if (loading) return <Loading />;
   if (error || !data) return <ErrorState message={error} />;
   const ConnectionCard = ({ source, icon: Icon, configured, lastRun }: { source: 'qonto' | 'stripe'; icon: typeof Landmark; configured: boolean; lastRun: ConnectionsResponse['qonto']['lastRun'] }) => <section className="card connection-card"><div className="connection-logo"><Icon size={28} /></div><div className="connection-main"><div className="section-title"><div><h2>{source === 'qonto' ? 'Qonto' : 'Stripe'}</h2><p>{source === 'qonto' ? 'Comptes, soldes, transactions, catégories et fournisseurs.' : 'MRR HT, clients, offres et factures payées en lecture seule.'}</p></div><span className={`status ${configured ? 'connected' : 'disconnected'}`}>{configured ? <CheckCircle2 size={15} /> : <XCircle size={15} />}{configured ? 'Configuré' : 'Non configuré'}</span></div><div className="connection-meta"><span>Dernière synchronisation : <strong>{formatDate(lastRun?.completed_at || null)}</strong></span>{lastRun && <span>{lastRun.imported_count} élément(s) · {lastRun.message}</span>}</div><button className="button primary" disabled={!configured || syncing !== null} onClick={() => void sync(source)}>{syncing === source ? <Loader2 className="spin" size={17} /> : <RefreshCw size={17} />} Synchroniser maintenant</button></div></section>;
-  return <div className="page-stack"><div className="notice security"><Database size={18} /><span>Les clés ne sont jamais envoyées au navigateur. Le serveur écoute seulement sur <code>127.0.0.1</code> par défaut.</span></div>{message && <div className="notice">{message}</div>}<div className="connections-grid"><ConnectionCard source="qonto" icon={Landmark} configured={data.qonto.configured} lastRun={data.qonto.lastRun} /><ConnectionCard source="stripe" icon={CircleDollarSign} configured={data.stripe.configured} lastRun={data.stripe.lastRun} /></div><section className="card setup"><div className="section-title"><div><h2>Configuration locale</h2><p>Copie <code>.env.example</code> vers <code>.env</code>, sans jamais commiter ce dernier.</p></div></div><ol><li><strong>Qonto recommandé :</strong> renseigner <code>QONTO_ACCESS_TOKEN</code> avec OAuth et le scope <code>organization.read</code>.</li><li><strong>Qonto alternatif :</strong> renseigner <code>QONTO_API_LOGIN</code> et <code>QONTO_API_SECRET</code> pour une seule entreprise.</li><li><strong>Stripe :</strong> renseigner une Restricted API Key <code>rk_live_…</code> dans <code>STRIPE_RESTRICTED_KEY</code>, avec les lectures <strong>Subscriptions, Customers, Prices, Products et Invoices</strong>.</li><li>Redémarrer l’application puis lancer chaque synchronisation.</li></ol></section></div>;
+  return <div className="page-stack"><div className="notice security"><Database size={18} /><span>Les clés ne sont jamais envoyées au navigateur. Le serveur écoute seulement sur <code>127.0.0.1</code> par défaut.</span></div>{message && <div className="notice">{message}</div>}<div className="connections-grid"><ConnectionCard source="qonto" icon={Landmark} configured={data.qonto.configured} lastRun={data.qonto.lastRun} /><ConnectionCard source="stripe" icon={CircleDollarSign} configured={data.stripe.configured} lastRun={data.stripe.lastRun} /></div><section className="card setup"><div className="section-title"><div><h2>Configuration locale</h2><p>Copie <code>.env.example</code> vers <code>.env</code>, sans jamais commiter ce dernier.</p></div></div><ol><li><strong>Qonto recommandé :</strong> renseigner <code>QONTO_ACCESS_TOKEN</code> avec OAuth et le scope <code>organization.read</code>.</li><li><strong>Qonto alternatif :</strong> renseigner <code>QONTO_API_LOGIN</code> et <code>QONTO_API_SECRET</code> pour une seule entreprise.</li><li><strong>Stripe :</strong> renseigner une Restricted API Key <code>rk_live_…</code> dans <code>STRIPE_RESTRICTED_KEY</code>. <strong>Subscriptions: Read</strong> est indispensable ; <strong>Customers, Products et Invoices: Read</strong> enrichissent les noms, offres et chiffres d’affaires.</li><li>Redémarrer l’application puis lancer chaque synchronisation.</li></ol></section></div>;
 };
 
 export default function App() {
@@ -384,5 +441,5 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const refresh = useCallback(() => setRefreshKey((key) => key + 1), []);
   const active = tabs.find((item) => item.id === tab)!;
-  return <div className="app-shell"><aside><div className="brand"><div className="brand-mark"><BarChart3 /></div><div><strong>Pilotage</strong><span>Bien-être Connect</span></div></div><nav>{tabs.map((item) => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={19} />{item.label}</button>)}</nav><div className="sidebar-foot"><Landmark size={16} /><span>Qonto + Stripe<br />Lecture seule</span></div></aside><main><header><div><span className="eyebrow">Pilotage financier</span><h1>{active.label}</h1></div><button className="button secondary" onClick={refresh}><RefreshCw size={17} /> Actualiser</button></header><div className="content">{tab === 'dashboard' && <Dashboard refreshKey={refreshKey} />}{tab === 'expenses' && <Expenses refreshKey={refreshKey} />}{tab === 'vendors' && <Vendors refreshKey={refreshKey} />}{tab === 'clients' && <Clients refreshKey={refreshKey} />}{tab === 'forecast' && <Forecast refreshKey={refreshKey} onChanged={refresh} />}{tab === 'kpis' && <FinancialKpis refreshKey={refreshKey} onChanged={refresh} />}{tab === 'connections' && <Connections refreshKey={refreshKey} onChanged={refresh} />}</div></main></div>;
+  return <div className="app-shell"><aside><div className="brand"><div className="brand-mark"><BarChart3 /></div><div><strong>Pilotage</strong><span>Bien-être Connect</span></div></div><nav>{tabs.map((item) => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={19} />{item.label}</button>)}</nav><div className="sidebar-foot"><Landmark size={16} /><span>Qonto + Stripe<br />Lecture seule</span></div></aside><main><header><div><span className="eyebrow">Pilotage financier</span><h1>{active.label}</h1></div><button className="button secondary" onClick={refresh}><RefreshCw size={17} /> Actualiser</button></header><div className="content">{tab === 'dashboard' && <Dashboard refreshKey={refreshKey} onChanged={refresh} />}{tab === 'expenses' && <Expenses refreshKey={refreshKey} />}{tab === 'vendors' && <Vendors refreshKey={refreshKey} />}{tab === 'clients' && <Clients refreshKey={refreshKey} />}{tab === 'forecast' && <Forecast refreshKey={refreshKey} onChanged={refresh} />}{tab === 'kpis' && <FinancialKpis />}{tab === 'connections' && <Connections refreshKey={refreshKey} onChanged={refresh} />}</div></main></div>;
 }
