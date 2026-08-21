@@ -45,6 +45,8 @@ header h1 { margin: 4px 0 0; font: 800 28px/1.2 'Manrope', sans-serif; color: va
 .button.primary { color: white; background: var(--green-600); }
 .button.primary:hover { background: var(--green-800); }
 .button.secondary { color: var(--green-800); background: white; border: 1px solid var(--border); }
+.button.discussion { color: #78551f; background: #f7ead2; border: 1px solid #ead5ab; }
+.decision-button { padding: 7px 10px; font-size: 11px; white-space: nowrap; }
 .button:disabled { opacity: .45; cursor: not-allowed; }
 .icon-button { border: 0; border-radius: 8px; background: transparent; width: 34px; height: 34px; display: grid; place-items: center; }
 .icon-button.danger { color: #b34e41; }
@@ -139,6 +141,8 @@ details[open] > summary .summary-label > svg { transform: rotate(90deg); }
 .tax-preview small { grid-column: 1 / -1; color: #587064; }
 .form-actions, .row-actions { display: flex; align-items: center; gap: 9px; }
 .future-costs-table { min-width: 1120px; }
+.forecast-detail-table { min-width: 1180px; }
+.discussion-card { border-color: #e6d4ad; background: #fffcf5; }
 textarea { min-height: 78px; resize: vertical; }
 .form-error { margin: 0; color: #b13f35; font-size: 13px; }
 .planned-list { display: grid; gap: 9px; }
@@ -155,6 +159,7 @@ textarea { min-height: 78px; resize: vertical; }
 .status { display: inline-flex; align-items: center; gap: 5px; border-radius: 99px; padding: 6px 9px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .status.connected { color: #276348; background: #dff0e7; }
 .status.disconnected { color: #985142; background: #f7e3de; }
+.status.discussing { color: #78551f; background: #f7ead2; }
 .connection-meta { display: grid; gap: 4px; color: var(--muted); font-size: 12px; margin: 10px 0 17px; }
 .setup ol { margin: 0; padding-left: 21px; color: #44564e; line-height: 1.8; }
 .kpi-settings-layout { align-items: start; }

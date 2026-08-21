@@ -31,6 +31,18 @@ describe('prévisionnel', () => {
     expect(result.map((month) => month.plannedMonthlyCents)).toEqual([0, 5000, 5000]);
   });
 
+  it('applique une dépense trimestrielle tous les trois mois', () => {
+    const result = buildForecast({ start: new Date(2026, 7, 21), months: 7, cashBalanceCents: 100000,
+      stripeMrrCents: 0, recurringVendors: [], plannedExpenses: [plan({ kind: 'quarterly', startDate: '2026-09-01', amountCents: 9000 })] });
+    expect(result.map((month) => month.plannedQuarterlyCents)).toEqual([0, 9000, 0, 0, 9000, 0, 0]);
+  });
+
+  it('applique une dépense annuelle uniquement au mois anniversaire', () => {
+    const result = buildForecast({ start: new Date(2026, 7, 21), months: 14, cashBalanceCents: 100000,
+      stripeMrrCents: 0, recurringVendors: [], plannedExpenses: [plan({ kind: 'yearly', startDate: '2026-09-15', amountCents: 12000 })] });
+    expect(result.map((month) => month.plannedYearlyCents)).toEqual([0, 12000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 12000]);
+  });
+
   it('inclut les abonnements Qonto dans chaque mois', () => {
     const result = buildForecast({ start: new Date(2026, 7, 21), months: 2, cashBalanceCents: 100000,
       stripeMrrCents: 20000, recurringVendors: recurring, plannedExpenses: [] });
