@@ -3,6 +3,7 @@ import type {
   CashflowMonth, ExpenseHierarchy, ExpenseTransaction, FinancialSettings, ForecastMonth,
   PlannedExpense, RecurringVendor, VendorRanking,
 } from '../shared/types.js';
+import { plannedExpenseOccursInMonth } from '../shared/forecast.js';
 
 type TransactionRow = {
   id: string;
@@ -28,7 +29,7 @@ type PlannedRow = {
   vendor: string;
   amount_cents: number;
   entered_amount_cents: number | null;
-  tax_mode: 'ht' | 'ttc' | 'reverse_charge';
+  tax_mode: 'ht' | 'ttc' | 'no_vat' | 'reverse_charge';
   vat_rate_basis_points: number;
   category: string;
   subcategory: string;
@@ -80,7 +81,7 @@ export const mapPlannedExpense = (row: PlannedRow): PlannedExpense => ({
 
 export const plannedAmountExcludingTax = (
   enteredAmountCents: number,
-  taxMode: 'ht' | 'ttc' | 'reverse_charge',
+  taxMode: 'ht' | 'ttc' | 'no_vat' | 'reverse_charge',
   vatRateBasisPoints: number,
 ) => taxMode === 'ttc'
   ? Math.round(enteredAmountCents / (1 + Math.max(0, vatRateBasisPoints) / 10_000))
@@ -278,20 +279,7 @@ export const buildForecast = (input: {
   return Array.from({ length: input.months }, (_, index) => {
     const monthDate = addMonths(input.start, index);
     const key = localMonthKey(monthDate);
-    const monthStart = new Date(`${key}-01T00:00:00`);
-    const monthEnd = addMonths(monthStart, 1);
-    const activePlans = input.plannedExpenses.filter((expense) => {
-      if (!expense.active) return false;
-      const starts = new Date(`${expense.startDate}T00:00:00`);
-      const ends = expense.endDate ? new Date(`${expense.endDate}T23:59:59`) : null;
-      if (expense.kind === 'one_off') return starts >= monthStart && starts < monthEnd;
-      if (starts >= monthEnd || (ends && ends < monthStart)) return false;
-      const elapsedMonths = (monthStart.getFullYear() - starts.getFullYear()) * 12 + monthStart.getMonth() - starts.getMonth();
-      if (elapsedMonths < 0) return false;
-      if (expense.kind === 'quarterly') return elapsedMonths % 3 === 0;
-      if (expense.kind === 'yearly') return elapsedMonths % 12 === 0;
-      return true;
-    });
+    const activePlans = input.plannedExpenses.filter((expense) => plannedExpenseOccursInMonth(expense, key));
     const plannedMonthlyCents = activePlans.filter((expense) => expense.kind === 'monthly').reduce((sum, expense) => sum + expense.amountCents, 0);
     const plannedQuarterlyCents = activePlans.filter((expense) => expense.kind === 'quarterly').reduce((sum, expense) => sum + expense.amountCents, 0);
     const plannedYearlyCents = activePlans.filter((expense) => expense.kind === 'yearly').reduce((sum, expense) => sum + expense.amountCents, 0);

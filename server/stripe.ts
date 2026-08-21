@@ -84,6 +84,7 @@ export const syncStripe = async (db: Database.Database) => {
     let activeSubscriptions = 0;
     let currency = 'EUR';
     const customers = new Map<string, CustomerAggregate>();
+    const invoices: Array<{ id: string; customerId: string | null; amountHtCents: number; currency: string; paidAt: string }> = [];
 
     for await (const subscription of stripe.subscriptions.list({
       status: 'all',
@@ -130,14 +131,15 @@ export const syncStripe = async (db: Database.Database) => {
     }
 
     for await (const invoice of stripe.invoices.list({ status: 'paid', limit: 100 })) {
-      const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;
+      const amountHt = invoiceAmountExcludingTax(invoice);
+      const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id || null;
+      const paidAt = unixToIso(invoice.status_transitions.paid_at) || unixToIso(invoice.created)!;
+      invoices.push({ id: invoice.id, customerId, amountHtCents: amountHt, currency: invoice.currency.toUpperCase(), paidAt });
       if (!customerId) continue;
       const customer = customers.get(customerId);
       if (!customer) continue;
-      const amountHt = invoiceAmountExcludingTax(invoice);
       customer.lifetimeSpendHtCents += amountHt;
       customer.paidInvoiceCount += 1;
-      const paidAt = unixToIso(invoice.status_transitions.paid_at) || unixToIso(invoice.created);
       if (paidAt && (!customer.firstPaidAt || paidAt < customer.firstPaidAt)) customer.firstPaidAt = paidAt;
       if (paidAt && (!customer.lastPaidAt || paidAt > customer.lastPaidAt)) customer.lastPaidAt = paidAt;
     }
@@ -147,12 +149,15 @@ export const syncStripe = async (db: Database.Database) => {
     const replace = db.transaction(() => {
       db.prepare('DELETE FROM stripe_customer_offers').run();
       db.prepare('DELETE FROM stripe_customers').run();
+      db.prepare('DELETE FROM stripe_invoices').run();
       const insertCustomer = db.prepare(`INSERT INTO stripe_customers(id, name, email, currency,
         active_subscription_count, current_mrr_ht_cents, lifetime_spend_ht_cents, paid_invoice_count,
         first_paid_at, last_paid_at, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       const insertOffer = db.prepare(`INSERT INTO stripe_customer_offers(customer_id, subscription_id, price_id,
         product_id, product_name, interval, interval_count, quantity, monthly_mrr_ht_cents)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      const insertInvoice = db.prepare(`INSERT INTO stripe_invoices(id, customer_id, amount_ht_cents, currency, paid_at, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?)`);
       for (const customer of customers.values()) {
         insertCustomer.run(customer.id, customer.name, customer.email, customer.currency,
           customer.activeSubscriptionCount, Math.round(customer.currentMrrHtCents), Math.round(customer.lifetimeSpendHtCents),
@@ -160,6 +165,8 @@ export const syncStripe = async (db: Database.Database) => {
         for (const offer of customer.offers) insertOffer.run(customer.id, offer.subscriptionId, offer.priceId,
           offer.productId, offer.productName, offer.interval, offer.intervalCount, offer.quantity, offer.monthlyMrrHtCents);
       }
+      for (const invoice of invoices) insertInvoice.run(invoice.id, invoice.customerId, Math.round(invoice.amountHtCents),
+        invoice.currency, invoice.paidAt, syncedAt);
       db.prepare(`INSERT INTO stripe_metrics(id, mrr_cents, arr_cents, active_subscriptions, currency, synced_at)
         VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET mrr_cents=excluded.mrr_cents,
         arr_cents=excluded.arr_cents, active_subscriptions=excluded.active_subscriptions, currency=excluded.currency, synced_at=excluded.synced_at`)
@@ -169,7 +176,7 @@ export const syncStripe = async (db: Database.Database) => {
     });
     replace();
     db.prepare("UPDATE sync_runs SET status='success', completed_at=?, imported_count=?, message=? WHERE id=?")
-      .run(syncedAt, activeSubscriptions + customers.size,
+      .run(syncedAt, activeSubscriptions + customers.size + invoices.length,
         `Lecture seule · ${customers.size} client(s) actif(s) · MRR HT`, run.lastInsertRowid);
     return { mrrCents: roundedMrr, activeSubscriptions, activeClients: customers.size, currency };
   } catch (error) {

@@ -139,6 +139,17 @@ const migrate = (db: Database.Database) => {
 
     CREATE INDEX IF NOT EXISTS idx_stripe_customer_offers_customer ON stripe_customer_offers(customer_id);
 
+    CREATE TABLE IF NOT EXISTS stripe_invoices (
+      id TEXT PRIMARY KEY,
+      customer_id TEXT,
+      amount_ht_cents INTEGER NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      paid_at TEXT NOT NULL,
+      synced_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_stripe_invoices_paid_at ON stripe_invoices(paid_at DESC);
+
     CREATE TABLE IF NOT EXISTS financial_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       receivables_cents INTEGER NOT NULL DEFAULT 0 CHECK (receivables_cents >= 0),

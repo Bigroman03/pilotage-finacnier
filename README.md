@@ -12,11 +12,14 @@ Application locale de pilotage financier connectée en lecture seule à Qonto et
 - détection des fournisseurs récurrents et estimation de leur coût mensuel ;
 - graphique comparatif des gains et pertes constatés sur Qonto ;
 - ajout et modification complète de coûts futurs mensuels, trimestriels, annuels ou uniques ;
-- saisie HT, TTC ou avec TVA autoliquidée, toujours normalisée en HT dans la projection ;
+- saisie HT, TTC, sans TVA ou avec TVA autoliquidée, toujours normalisée en HT dans la projection ;
 - date de début, date de fin facultative, catégorie, fournisseur, statut et notes ;
 - espace « À discuter avec mon associé » pour conserver des dépenses sans les inclure dans la projection ;
 - prévision des dépenses et de la trésorerie sur douze mois ;
+- agenda budgétaire visuel sur douze mois avec cartes interactives et détail des échéances ;
 - récupération du MRR HT, de l’ARR HT et du nombre d’abonnements Stripe actifs ;
+- chiffre d’affaires HT par période à partir des factures Stripe payées ;
+- vue d’ensemble filtrable en journalier, hebdomadaire, mensuel, annuel ou sur une plage personnalisée ;
 - onglet Clients avec offres actives, MRR HT par client, classement par CA encaissé HT et paniers moyens ;
 - onglet KPI avec flux net, burn rate, runway, couverture des charges fixes et BFR simplifié ;
 - stockage local dans SQLite ;
