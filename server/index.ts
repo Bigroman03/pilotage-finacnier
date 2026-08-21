@@ -1,0 +1,208 @@
+import 'dotenv/config';
+import express from 'express';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { z } from 'zod';
+import { getDatabase } from './db.js';
+import {
+  buildExpenseHierarchy,
+  buildForecast,
+  detectRecurringVendors,
+  getExpenseTransactions,
+  listPlannedExpenses,
+  mapPlannedExpense,
+} from './analytics.js';
+import { EXPENSE_CATEGORIES } from './classification.js';
+import { isQontoConfigured, syncQonto } from './qonto.js';
+import { isStripeConfigured, syncStripe } from './stripe.js';
+
+const app = express();
+const db = getDatabase();
+const port = Number(process.env.PORT || 3001);
+const host = process.env.HOST || '127.0.0.1';
+
+app.disable('x-powered-by');
+app.use(express.json({ limit: '1mb' }));
+
+const asyncRoute = (handler: (req: express.Request, res: express.Response) => Promise<unknown>) =>
+  (req: express.Request, res: express.Response, next: express.NextFunction) => void handler(req, res).catch(next);
+
+const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
+const plannedExpenseSchema = z.object({
+  label: z.string().trim().min(2).max(160),
+  vendor: z.string().trim().min(2).max(120),
+  amountCents: z.coerce.number().int().positive().max(1_000_000_000),
+  category: z.string().trim().min(2).max(100),
+  subcategory: z.string().trim().min(2).max(100),
+  kind: z.enum(['monthly', 'one_off']),
+  startDate: z.string().regex(dateOnly),
+  endDate: z.string().regex(dateOnly).nullable().optional(),
+  notes: z.string().trim().max(1000).nullable().optional(),
+  active: z.boolean().optional().default(true),
+}).refine((value) => !value.endDate || value.endDate >= value.startDate, {
+  message: 'La date de fin doit être postérieure à la date de début.',
+  path: ['endDate'],
+});
+
+app.get('/api/health', (_req, res) => res.json({ ok: true, version: '0.1.0' }));
+
+app.get('/api/connections', (_req, res) => {
+  const runs = db.prepare(`SELECT source, status, completed_at, imported_count, message
+    FROM sync_runs WHERE id IN (SELECT MAX(id) FROM sync_runs GROUP BY source)`).all();
+  res.json({
+    qonto: { configured: isQontoConfigured(), lastRun: runs.find((row: any) => row.source === 'qonto') || null },
+    stripe: { configured: isStripeConfigured(), lastRun: runs.find((row: any) => row.source === 'stripe') || null },
+  });
+});
+
+app.post('/api/sync/qonto', asyncRoute(async (_req, res) => res.json(await syncQonto(db))));
+app.post('/api/sync/stripe', asyncRoute(async (_req, res) => res.json(await syncStripe(db))));
+
+app.get('/api/categories', (_req, res) => res.json({ categories: EXPENSE_CATEGORIES }));
+
+app.get('/api/expenses', (req, res) => {
+  const filters = {
+    from: typeof req.query.from === 'string' ? req.query.from : undefined,
+    to: typeof req.query.to === 'string' ? req.query.to : undefined,
+    category: typeof req.query.category === 'string' ? req.query.category : undefined,
+    vendor: typeof req.query.vendor === 'string' ? req.query.vendor : undefined,
+    search: typeof req.query.search === 'string' ? req.query.search.trim() : undefined,
+  };
+  const transactions = getExpenseTransactions(db, filters);
+  res.json({
+    totalCents: transactions.reduce((sum, row) => sum + row.amountCents, 0),
+    transactionCount: transactions.length,
+    hierarchy: buildExpenseHierarchy(transactions),
+  });
+});
+
+app.get('/api/vendors/recurring', (_req, res) => {
+  const vendors = detectRecurringVendors(db);
+  res.json({
+    totalMonthlyCents: vendors.reduce((sum, vendor) => sum + vendor.estimatedMonthlyCents, 0),
+    vendors,
+  });
+});
+
+app.patch('/api/vendors/:vendor', (req, res) => {
+  const schema = z.object({
+    displayName: z.string().trim().min(2).max(120).nullable().optional(),
+    category: z.string().trim().min(2).max(100).nullable().optional(),
+    subcategory: z.string().trim().min(2).max(100).nullable().optional(),
+    recurringStatus: z.enum(['auto', 'monthly', 'not_recurring']),
+    monthlyOverrideCents: z.coerce.number().int().positive().nullable().optional(),
+    notes: z.string().trim().max(1000).nullable().optional(),
+  });
+  const value = schema.parse(req.body);
+  const vendor = decodeURIComponent(req.params.vendor);
+  db.prepare(`INSERT INTO vendor_overrides(vendor, display_name, category, subcategory, recurring_status, monthly_override_cents, notes, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(vendor) DO UPDATE SET display_name=excluded.display_name,
+    category=excluded.category, subcategory=excluded.subcategory, recurring_status=excluded.recurring_status,
+    monthly_override_cents=excluded.monthly_override_cents, notes=excluded.notes, updated_at=excluded.updated_at`)
+    .run(vendor, value.displayName || null, value.category || null, value.subcategory || null, value.recurringStatus,
+      value.monthlyOverrideCents || null, value.notes || null, new Date().toISOString());
+  res.json({ ok: true });
+});
+
+app.get('/api/planned-expenses', (_req, res) => res.json({ expenses: listPlannedExpenses(db) }));
+
+app.post('/api/planned-expenses', (req, res) => {
+  const value = plannedExpenseSchema.parse(req.body);
+  const now = new Date().toISOString();
+  const result = db.prepare(`INSERT INTO planned_expenses(label, vendor, amount_cents, category, subcategory, kind,
+    start_date, end_date, notes, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(value.label, value.vendor, value.amountCents, value.category, value.subcategory, value.kind,
+      value.startDate, value.endDate || null, value.notes || null, value.active ? 1 : 0, now, now);
+  const row = db.prepare('SELECT * FROM planned_expenses WHERE id = ?').get(result.lastInsertRowid) as any;
+  res.status(201).json({ expense: mapPlannedExpense(row) });
+});
+
+app.put('/api/planned-expenses/:id', (req, res) => {
+  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const value = plannedExpenseSchema.parse(req.body);
+  const result = db.prepare(`UPDATE planned_expenses SET label=?, vendor=?, amount_cents=?, category=?, subcategory=?,
+    kind=?, start_date=?, end_date=?, notes=?, active=?, updated_at=? WHERE id=?`)
+    .run(value.label, value.vendor, value.amountCents, value.category, value.subcategory, value.kind,
+      value.startDate, value.endDate || null, value.notes || null, value.active ? 1 : 0, new Date().toISOString(), id);
+  if (!result.changes) return res.status(404).json({ error: 'Dépense introuvable.' });
+  const row = db.prepare('SELECT * FROM planned_expenses WHERE id = ?').get(id) as any;
+  return res.json({ expense: mapPlannedExpense(row) });
+});
+
+app.delete('/api/planned-expenses/:id', (req, res) => {
+  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const result = db.prepare('DELETE FROM planned_expenses WHERE id = ?').run(id);
+  if (!result.changes) return res.status(404).json({ error: 'Dépense introuvable.' });
+  return res.status(204).send();
+});
+
+app.get('/api/forecast', (req, res) => {
+  const months = Math.min(24, Math.max(1, Number(req.query.months || 12)));
+  const cashBalanceCents = (db.prepare("SELECT COALESCE(SUM(balance_cents), 0) value FROM bank_accounts WHERE currency='EUR'").get() as { value: number }).value;
+  const stripe = db.prepare('SELECT * FROM stripe_metrics WHERE id=1').get() as { mrr_cents: number } | undefined;
+  const recurringVendors = detectRecurringVendors(db);
+  const plannedExpenses = listPlannedExpenses(db);
+  const monthsData = buildForecast({
+    start: new Date(), months, cashBalanceCents, stripeMrrCents: stripe?.mrr_cents || 0, recurringVendors, plannedExpenses,
+  });
+  res.json({
+    assumptions: {
+      cashBalanceCents,
+      stripeMrrCents: stripe?.mrr_cents || 0,
+      recurringQontoCents: recurringVendors.reduce((sum, vendor) => sum + vendor.estimatedMonthlyCents, 0),
+    },
+    months: monthsData,
+    plannedExpenses,
+  });
+});
+
+app.get('/api/dashboard', (_req, res) => {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const next30 = new Date(now.getTime() + 30 * 86400_000);
+  const currentExpenses = getExpenseTransactions(db, { from: monthStart });
+  const allExpenses = getExpenseTransactions(db);
+  const recurring = detectRecurringVendors(db);
+  const planned = listPlannedExpenses(db);
+  const stripe = db.prepare('SELECT * FROM stripe_metrics WHERE id=1').get() as { mrr_cents: number; active_subscriptions: number; synced_at: string } | undefined;
+  const qontoRun = db.prepare("SELECT completed_at FROM sync_runs WHERE source='qonto' AND status='success' ORDER BY id DESC LIMIT 1").get() as { completed_at: string } | undefined;
+  const stripeRun = db.prepare("SELECT completed_at FROM sync_runs WHERE source='stripe' AND status='success' ORDER BY id DESC LIMIT 1").get() as { completed_at: string } | undefined;
+  const upcoming = planned.filter((expense) => expense.active && new Date(expense.startDate) <= next30).slice(0, 8);
+  const hierarchy = buildExpenseHierarchy(currentExpenses);
+
+  res.json({
+    connections: {
+      qonto: isQontoConfigured(), stripe: isStripeConfigured(), qontoLastSync: qontoRun?.completed_at || null, stripeLastSync: stripeRun?.completed_at || null,
+    },
+    kpis: {
+      cashBalanceCents: (db.prepare("SELECT COALESCE(SUM(balance_cents), 0) value FROM bank_accounts WHERE currency='EUR'").get() as { value: number }).value,
+      currentMonthExpensesCents: currentExpenses.reduce((sum, row) => sum + row.amountCents, 0),
+      recurringMonthlyCents: recurring.reduce((sum, vendor) => sum + vendor.estimatedMonthlyCents, 0),
+      plannedNext30DaysCents: upcoming.reduce((sum, expense) => sum + expense.amountCents, 0),
+      stripeMrrCents: stripe?.mrr_cents || 0,
+      activeStripeSubscriptions: stripe?.active_subscriptions || 0,
+    },
+    topCategories: hierarchy.slice(0, 7).map((category) => ({ name: category.category, valueCents: category.totalCents })),
+    recentExpenses: allExpenses.slice(0, 8),
+    upcomingPlanned: upcoming,
+  });
+});
+
+const distDirectory = resolve('dist');
+if (existsSync(distDirectory)) {
+  app.use(express.static(distDirectory));
+  app.get('/{*splat}', (_req, res) => res.sendFile(resolve(distDirectory, 'index.html')));
+}
+
+app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = error instanceof z.ZodError
+    ? error.issues.map((issue) => issue.message).join(' ')
+    : error instanceof Error ? error.message : 'Erreur interne.';
+  console.error('[pilotage]', message);
+  res.status(error instanceof z.ZodError ? 400 : 500).json({ error: message });
+});
+
+app.listen(port, host, () => {
+  console.log(`Pilotage financier disponible sur http://${host}:${port}`);
+});
+
