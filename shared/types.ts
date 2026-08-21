@@ -1,4 +1,4 @@
-export type ExpenseKind = 'monthly' | 'one_off';
+export type ExpenseKind = 'monthly' | 'quarterly' | 'yearly' | 'one_off';
 export type PlannedTaxMode = 'ht' | 'ttc' | 'reverse_charge';
 
 export type PlannedExpense = {
@@ -121,6 +121,8 @@ export type ForecastMonth = {
   label: string;
   recurringQontoCents: number;
   plannedMonthlyCents: number;
+  plannedQuarterlyCents: number;
+  plannedYearlyCents: number;
   plannedOneOffCents: number;
   totalExpensesCents: number;
   stripeMrrCents: number;

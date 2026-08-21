@@ -11,9 +11,10 @@ Application locale de pilotage financier connectée en lecture seule à Qonto et
 - classement global des fournisseurs par dépenses cumulées, poids et fréquence ;
 - détection des fournisseurs récurrents et estimation de leur coût mensuel ;
 - graphique comparatif des gains et pertes constatés sur Qonto ;
-- ajout et modification complète de coûts futurs mensuels ou uniques ;
+- ajout et modification complète de coûts futurs mensuels, trimestriels, annuels ou uniques ;
 - saisie HT, TTC ou avec TVA autoliquidée, toujours normalisée en HT dans la projection ;
 - date de début, date de fin facultative, catégorie, fournisseur, statut et notes ;
+- espace « À discuter avec mon associé » pour conserver des dépenses sans les inclure dans la projection ;
 - prévision des dépenses et de la trésorerie sur douze mois ;
 - récupération du MRR HT, de l’ARR HT et du nombre d’abonnements Stripe actifs ;
 - onglet Clients avec offres actives, MRR HT par client, classement par CA encaissé HT et paniers moyens ;
@@ -110,7 +111,7 @@ solde projeté = solde Qonto + MRR Stripe HT − fournisseurs récurrents Qonto 
 
 Il s’agit d’une aide au pilotage, pas d’une prévision comptable certifiée. Les montants récurrents détectés automatiquement doivent être validés.
 
-Pour un coût saisi TTC, l’application calcule `HT = TTC / (1 + taux de TVA)`. Un coût saisi HT ou soumis à autoliquidation est conservé tel quel dans la projection : la TVA autoliquidée n’est pas traitée comme une charge d’exploitation. Chaque coût peut être modifié, mis en pause ou supprimé.
+Pour un coût saisi TTC, l’application calcule `HT = TTC / (1 + taux de TVA)`. Un coût saisi HT ou soumis à autoliquidation est conservé tel quel dans la projection : la TVA autoliquidée n’est pas traitée comme une charge d’exploitation. Les coûts trimestriels sont appliqués tous les trois mois à partir de la première échéance, et les coûts annuels au mois anniversaire. Chaque coût peut être modifié, déplacé dans l’espace de discussion, réintégré ou supprimé.
 
 ## Docker
 

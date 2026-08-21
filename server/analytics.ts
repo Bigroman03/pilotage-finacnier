@@ -32,7 +32,7 @@ type PlannedRow = {
   vat_rate_basis_points: number;
   category: string;
   subcategory: string;
-  kind: 'monthly' | 'one_off';
+  kind: 'monthly' | 'quarterly' | 'yearly' | 'one_off';
   start_date: string;
   end_date: string | null;
   notes: string | null;
@@ -285,11 +285,18 @@ export const buildForecast = (input: {
       const starts = new Date(`${expense.startDate}T00:00:00`);
       const ends = expense.endDate ? new Date(`${expense.endDate}T23:59:59`) : null;
       if (expense.kind === 'one_off') return starts >= monthStart && starts < monthEnd;
-      return starts < monthEnd && (!ends || ends >= monthStart);
+      if (starts >= monthEnd || (ends && ends < monthStart)) return false;
+      const elapsedMonths = (monthStart.getFullYear() - starts.getFullYear()) * 12 + monthStart.getMonth() - starts.getMonth();
+      if (elapsedMonths < 0) return false;
+      if (expense.kind === 'quarterly') return elapsedMonths % 3 === 0;
+      if (expense.kind === 'yearly') return elapsedMonths % 12 === 0;
+      return true;
     });
     const plannedMonthlyCents = activePlans.filter((expense) => expense.kind === 'monthly').reduce((sum, expense) => sum + expense.amountCents, 0);
+    const plannedQuarterlyCents = activePlans.filter((expense) => expense.kind === 'quarterly').reduce((sum, expense) => sum + expense.amountCents, 0);
+    const plannedYearlyCents = activePlans.filter((expense) => expense.kind === 'yearly').reduce((sum, expense) => sum + expense.amountCents, 0);
     const plannedOneOffCents = activePlans.filter((expense) => expense.kind === 'one_off').reduce((sum, expense) => sum + expense.amountCents, 0);
-    const totalExpensesCents = recurringQontoCents + plannedMonthlyCents + plannedOneOffCents;
+    const totalExpensesCents = recurringQontoCents + plannedMonthlyCents + plannedQuarterlyCents + plannedYearlyCents + plannedOneOffCents;
     projectedBalanceCents += input.stripeMrrCents - totalExpensesCents;
 
     return {
@@ -297,6 +304,8 @@ export const buildForecast = (input: {
       label: monthDate.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' }),
       recurringQontoCents,
       plannedMonthlyCents,
+      plannedQuarterlyCents,
+      plannedYearlyCents,
       plannedOneOffCents,
       totalExpensesCents,
       stripeMrrCents: input.stripeMrrCents,

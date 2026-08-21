@@ -65,7 +65,7 @@ const migrate = (db: Database.Database) => {
       amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
       category TEXT NOT NULL,
       subcategory TEXT NOT NULL,
-      kind TEXT NOT NULL CHECK (kind IN ('monthly', 'one_off')),
+      kind TEXT NOT NULL CHECK (kind IN ('monthly', 'quarterly', 'yearly', 'one_off')),
       start_date TEXT NOT NULL,
       end_date TEXT,
       notes TEXT,
@@ -162,6 +162,37 @@ const migrate = (db: Database.Database) => {
   if (!plannedColumns.has('entered_amount_cents')) db.exec('ALTER TABLE planned_expenses ADD COLUMN entered_amount_cents INTEGER');
   if (!plannedColumns.has('tax_mode')) db.exec("ALTER TABLE planned_expenses ADD COLUMN tax_mode TEXT NOT NULL DEFAULT 'ht'");
   if (!plannedColumns.has('vat_rate_basis_points')) db.exec('ALTER TABLE planned_expenses ADD COLUMN vat_rate_basis_points INTEGER NOT NULL DEFAULT 2000');
+
+  const plannedTableSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='planned_expenses'").get() as { sql: string }).sql;
+  if (!plannedTableSql.includes("'quarterly'")) db.transaction(() => {
+    db.exec(`
+      ALTER TABLE planned_expenses RENAME TO planned_expenses_legacy;
+      CREATE TABLE planned_expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        label TEXT NOT NULL,
+        vendor TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+        category TEXT NOT NULL,
+        subcategory TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('monthly', 'quarterly', 'yearly', 'one_off')),
+        start_date TEXT NOT NULL,
+        end_date TEXT,
+        notes TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        entered_amount_cents INTEGER,
+        tax_mode TEXT NOT NULL DEFAULT 'ht',
+        vat_rate_basis_points INTEGER NOT NULL DEFAULT 2000
+      );
+      INSERT INTO planned_expenses(id, label, vendor, amount_cents, category, subcategory, kind, start_date,
+        end_date, notes, active, created_at, updated_at, entered_amount_cents, tax_mode, vat_rate_basis_points)
+      SELECT id, label, vendor, amount_cents, category, subcategory, kind, start_date, end_date, notes, active,
+        created_at, updated_at, entered_amount_cents, tax_mode, vat_rate_basis_points FROM planned_expenses_legacy;
+      DROP TABLE planned_expenses_legacy;
+      CREATE INDEX idx_planned_expenses_dates ON planned_expenses(start_date, end_date);
+    `);
+  })();
 };
 
 export const closeDatabase = () => {

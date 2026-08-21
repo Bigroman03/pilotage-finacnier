@@ -41,7 +41,7 @@ const plannedExpenseSchema = z.object({
   vatRateBasisPoints: z.coerce.number().int().min(0).max(10_000),
   category: z.string().trim().min(2).max(100),
   subcategory: z.string().trim().min(2).max(100),
-  kind: z.enum(['monthly', 'one_off']),
+  kind: z.enum(['monthly', 'quarterly', 'yearly', 'one_off']),
   startDate: z.string().regex(dateOnly),
   endDate: z.string().regex(dateOnly).nullable().optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
