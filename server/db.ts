@@ -107,6 +107,38 @@ const migrate = (db: Database.Database) => {
 
     CREATE INDEX IF NOT EXISTS idx_stripe_metric_history_synced_at ON stripe_metric_history(synced_at DESC);
 
+    CREATE TABLE IF NOT EXISTS stripe_customers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT,
+      currency TEXT NOT NULL DEFAULT 'EUR',
+      active_subscription_count INTEGER NOT NULL DEFAULT 0,
+      current_mrr_ht_cents INTEGER NOT NULL DEFAULT 0,
+      lifetime_spend_ht_cents INTEGER NOT NULL DEFAULT 0,
+      paid_invoice_count INTEGER NOT NULL DEFAULT 0,
+      first_paid_at TEXT,
+      last_paid_at TEXT,
+      synced_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_stripe_customers_spend ON stripe_customers(lifetime_spend_ht_cents DESC);
+
+    CREATE TABLE IF NOT EXISTS stripe_customer_offers (
+      customer_id TEXT NOT NULL,
+      subscription_id TEXT NOT NULL,
+      price_id TEXT NOT NULL,
+      product_id TEXT,
+      product_name TEXT NOT NULL,
+      interval TEXT NOT NULL,
+      interval_count INTEGER NOT NULL DEFAULT 1,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      monthly_mrr_ht_cents INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(customer_id, subscription_id, price_id),
+      FOREIGN KEY (customer_id) REFERENCES stripe_customers(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_stripe_customer_offers_customer ON stripe_customer_offers(customer_id);
+
     CREATE TABLE IF NOT EXISTS financial_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       receivables_cents INTEGER NOT NULL DEFAULT 0 CHECK (receivables_cents >= 0),
@@ -125,6 +157,11 @@ const migrate = (db: Database.Database) => {
       message TEXT
     );
   `);
+
+  const plannedColumns = new Set((db.prepare('PRAGMA table_info(planned_expenses)').all() as Array<{ name: string }>).map((column) => column.name));
+  if (!plannedColumns.has('entered_amount_cents')) db.exec('ALTER TABLE planned_expenses ADD COLUMN entered_amount_cents INTEGER');
+  if (!plannedColumns.has('tax_mode')) db.exec("ALTER TABLE planned_expenses ADD COLUMN tax_mode TEXT NOT NULL DEFAULT 'ht'");
+  if (!plannedColumns.has('vat_rate_basis_points')) db.exec('ALTER TABLE planned_expenses ADD COLUMN vat_rate_basis_points INTEGER NOT NULL DEFAULT 2000');
 };
 
 export const closeDatabase = () => {

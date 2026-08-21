@@ -27,6 +27,9 @@ type PlannedRow = {
   label: string;
   vendor: string;
   amount_cents: number;
+  entered_amount_cents: number | null;
+  tax_mode: 'ht' | 'ttc' | 'reverse_charge';
+  vat_rate_basis_points: number;
   category: string;
   subcategory: string;
   kind: 'monthly' | 'one_off';
@@ -61,6 +64,9 @@ export const mapPlannedExpense = (row: PlannedRow): PlannedExpense => ({
   label: row.label,
   vendor: row.vendor,
   amountCents: row.amount_cents,
+  enteredAmountCents: row.entered_amount_cents ?? row.amount_cents,
+  taxMode: row.tax_mode || 'ht',
+  vatRateBasisPoints: row.vat_rate_basis_points ?? 2000,
   category: row.category,
   subcategory: row.subcategory,
   kind: row.kind,
@@ -71,6 +77,14 @@ export const mapPlannedExpense = (row: PlannedRow): PlannedExpense => ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
+
+export const plannedAmountExcludingTax = (
+  enteredAmountCents: number,
+  taxMode: 'ht' | 'ttc' | 'reverse_charge',
+  vatRateBasisPoints: number,
+) => taxMode === 'ttc'
+  ? Math.round(enteredAmountCents / (1 + Math.max(0, vatRateBasisPoints) / 10_000))
+  : enteredAmountCents;
 
 export const getExpenseTransactions = (db: Database.Database, filters: {
   from?: string;

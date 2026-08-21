@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildForecast } from '../analytics.js';
+import { buildForecast, plannedAmountExcludingTax } from '../analytics.js';
 import type { PlannedExpense, RecurringVendor } from '../../shared/types.js';
 
 const recurring: RecurringVendor[] = [{
@@ -10,6 +10,7 @@ const recurring: RecurringVendor[] = [{
 
 const plan = (overrides: Partial<PlannedExpense>): PlannedExpense => ({
   id: 1, label: 'Dépense', vendor: 'Fournisseur', amountCents: 10000,
+  enteredAmountCents: 10000, taxMode: 'ht', vatRateBasisPoints: 2000,
   category: 'Autres dépenses', subcategory: 'Prévision', kind: 'one_off',
   startDate: '2026-09-15', endDate: null, notes: null, active: true,
   createdAt: '2026-08-21', updatedAt: '2026-08-21', ...overrides,
@@ -36,5 +37,12 @@ describe('prévisionnel', () => {
     expect(result.every((month) => month.recurringQontoCents === 1500)).toBe(true);
     expect(result[0].projectedBalanceCents).toBe(118500);
   });
-});
 
+  it('convertit un montant TTC à 20 % en HT', () => {
+    expect(plannedAmountExcludingTax(12000, 'ttc', 2000)).toBe(10000);
+  });
+
+  it('conserve en HT un coût soumis à autoliquidation', () => {
+    expect(plannedAmountExcludingTax(10000, 'reverse_charge', 2000)).toBe(10000);
+  });
+});

@@ -1,10 +1,14 @@
 export type ExpenseKind = 'monthly' | 'one_off';
+export type PlannedTaxMode = 'ht' | 'ttc' | 'reverse_charge';
 
 export type PlannedExpense = {
   id: number;
   label: string;
   vendor: string;
   amountCents: number;
+  enteredAmountCents: number;
+  taxMode: PlannedTaxMode;
+  vatRateBasisPoints: number;
   category: string;
   subcategory: string;
   kind: ExpenseKind;
@@ -142,4 +146,44 @@ export type DashboardResponse = {
   cashflowMonths: CashflowMonth[];
   recentExpenses: ExpenseTransaction[];
   upcomingPlanned: PlannedExpense[];
+};
+
+export type StripeClientOffer = {
+  subscriptionId: string;
+  priceId: string;
+  productId: string | null;
+  productName: string;
+  interval: string;
+  intervalCount: number;
+  quantity: number;
+  monthlyMrrHtCents: number;
+};
+
+export type StripeClient = {
+  rank: number;
+  id: string;
+  name: string;
+  email: string | null;
+  currency: string;
+  activeSubscriptionCount: number;
+  currentMrrHtCents: number;
+  lifetimeSpendHtCents: number;
+  paidInvoiceCount: number;
+  averageInvoiceHtCents: number;
+  firstPaidAt: string | null;
+  lastPaidAt: string | null;
+  offers: StripeClientOffer[];
+};
+
+export type ClientsResponse = {
+  summary: {
+    activeClientCount: number;
+    activeSubscriptionCount: number;
+    totalMrrHtCents: number;
+    averageMonthlyBasketHtCents: number;
+    lifetimeSpendHtCents: number;
+    paidInvoiceCount: number;
+    averageInvoiceHtCents: number;
+  };
+  clients: StripeClient[];
 };
