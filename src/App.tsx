@@ -6,7 +6,7 @@ import {
   Trophy, Users, WalletCards, XCircle,
 } from 'lucide-react';
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import type {
   ClientsResponse, DashboardResponse, ExpenseHierarchy, FinancialKpiResponse, ForecastMonth, PlannedExpense,
@@ -257,9 +257,12 @@ const expenseKindLabel = (kind: PlannedExpense['kind']) => ({
 }[kind]);
 
 const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: () => void }) => {
-  const { data, error, loading } = useRemote<ForecastResponse>('/api/forecast?months=12', refreshKey);
+  const [horizon, setHorizon] = useState<6 | 12 | 24>(12);
+  const { data, error, loading } = useRemote<ForecastResponse>(`/api/forecast?months=${horizon}`, refreshKey);
   const [form, setForm] = useState(expenseDefaults);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [showEditor, setShowEditor] = useState(false);
+  const [costFilter, setCostFilter] = useState<'all' | 'included' | 'discussing'>('all');
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
@@ -278,7 +281,7 @@ const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
           notes: form.notes || null, active: form.active,
         }),
       });
-      setForm(expenseDefaults); setEditingId(null); onChanged();
+      setForm(expenseDefaults); setEditingId(null); setShowEditor(false); onChanged();
     } catch (reason) { setFormError(reason instanceof Error ? reason.message : 'Erreur'); }
     finally { setSaving(false); }
   };
@@ -290,9 +293,10 @@ const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
       subcategory: expense.subcategory, kind: expense.kind, startDate: expense.startDate, endDate: expense.endDate || '',
       notes: expense.notes || '', active: expense.active,
     });
-    window.scrollTo({ top: 500, behavior: 'smooth' });
+    setShowEditor(true);
   };
-  const cancelEdit = () => { setEditingId(null); setForm(expenseDefaults); setFormError(''); };
+  const openNew = () => { setEditingId(null); setForm(expenseDefaults); setFormError(''); setShowEditor(true); };
+  const cancelEdit = () => { setEditingId(null); setForm(expenseDefaults); setFormError(''); setShowEditor(false); };
   const setDecision = async (expense: PlannedExpense, active: boolean) => {
     await api(`/api/planned-expenses/${expense.id}`, { method: 'PUT', body: JSON.stringify({
       label: expense.label, vendor: expense.vendor, enteredAmountCents: expense.enteredAmountCents,
@@ -305,22 +309,31 @@ const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
   const remove = async (id: number) => { if (!window.confirm('Supprimer cette dépense prévue ?')) return; await api(`/api/planned-expenses/${id}`, { method: 'DELETE' }); onChanged(); };
   if (loading) return <Loading />;
   if (error || !data) return <ErrorState message={error} />;
-  const chart = data.months.map((month) => ({ ...month, expenses: month.totalExpensesCents, balance: month.projectedBalanceCents, income: month.stripeMrrCents }));
   const enteredCents = Math.round(Number(form.amount.replace(',', '.') || 0) * 100);
   const vatBasisPoints = Math.round(Number(form.vatRate.replace(',', '.') || 0) * 100);
   const previewHtCents = form.taxMode === 'ttc' ? Math.round(enteredCents / (1 + vatBasisPoints / 10_000)) : enteredCents;
   const includedExpenses = data.plannedExpenses.filter((expense) => expense.active);
   const discussingExpenses = data.plannedExpenses.filter((expense) => !expense.active);
+  const visibleExpenses = data.plannedExpenses.filter((expense) => costFilter === 'all'
+    || (costFilter === 'included' ? expense.active : !expense.active));
+  const currentMonth = data.months[0];
+  const horizonMonth = data.months[data.months.length - 1];
   const selectedMonthKey = selectedMonth && data.months.some((month) => month.key === selectedMonth)
     ? selectedMonth : data.months[0]?.key;
   const selectedMonthData = data.months.find((month) => month.key === selectedMonthKey)!;
   const calendarCostsFor = (monthKey: string) => data.plannedExpenses.filter((expense) =>
     (expense.active || showCalendarDiscussions) && plannedExpenseOccursInMonth(expense, monthKey, true));
   const selectedMonthCosts = calendarCostsFor(selectedMonthKey);
-  const renderCostTable = (expenses: PlannedExpense[], discussion: boolean) => expenses.length ? <div className="table-wrap"><table className="future-costs-table"><thead><tr><th>Coût / fournisseur</th><th>Catégorie</th><th>Récurrence</th><th className="amount">Montant saisi</th><th>Fiscalité</th><th className="amount">Retenu HT</th><th>Décision</th><th>Actions</th></tr></thead><tbody>{expenses.map((expense) => <tr key={expense.id}><td><strong>{expense.label}</strong><small className="block">{expense.vendor}</small>{expense.notes && <small className="block">{expense.notes}</small>}</td><td><span className="tag">{expense.category}</span><small className="block">{expense.subcategory}</small></td><td>{expenseKindLabel(expense.kind)}<small className="block">{expense.kind === 'one_off' ? formatDate(expense.startDate) : `Dès le ${formatDate(expense.startDate)}`}{expense.endDate ? ` · fin ${formatDate(expense.endDate)}` : ''}</small></td><td className="amount">{formatEUR(expense.enteredAmountCents)}</td><td>{expense.taxMode === 'ttc' ? `TTC · TVA ${expense.vatRateBasisPoints / 100} %` : expense.taxMode === 'reverse_charge' ? `Autoliquidation · ${expense.vatRateBasisPoints / 100} %` : expense.taxMode === 'no_vat' ? 'Pas de TVA' : 'HT'}</td><td className="amount expense"><strong>{formatEUR(expense.amountCents)}</strong></td><td><button className={`button decision-button ${discussion ? 'secondary' : 'discussion'}`} onClick={() => void setDecision(expense, discussion)}>{discussion ? 'Inclure' : 'Mettre de côté'}</button></td><td><div className="row-actions"><button className="icon-button" onClick={() => edit(expense)} aria-label="Modifier"><Pencil size={17} /></button><button className="icon-button danger" onClick={() => void remove(expense.id)} aria-label="Supprimer"><Trash2 size={17} /></button></div></td></tr>)}</tbody></table></div> : <Empty>{discussion ? 'Aucune dépense mise de côté pour le moment.' : 'Aucun coût inclus dans le prévisionnel.'}</Empty>;
+  const renderCostTable = (expenses: PlannedExpense[]) => expenses.length ? <div className="table-wrap"><table className="future-costs-table simplified"><thead><tr><th>Coût / fournisseur</th><th>Catégorie</th><th>Récurrence</th><th>Échéance</th><th className="amount">Montant HT</th><th>Statut</th><th>Actions</th></tr></thead><tbody>{expenses.map((expense) => <tr key={expense.id}><td><strong>{expense.label}</strong><small className="block">{expense.vendor}</small>{expense.notes && <small className="block">{expense.notes}</small>}</td><td><span className="tag">{expense.category}</span><small className="block">{expense.subcategory}</small></td><td>{expenseKindLabel(expense.kind)}</td><td>{expense.kind === 'one_off' ? formatDate(expense.startDate) : `Dès le ${formatDate(expense.startDate)}`}{expense.endDate && <small className="block">Fin le {formatDate(expense.endDate)}</small>}</td><td className="amount expense"><strong>{formatEUR(expense.amountCents)}</strong><small className="block">hors taxes</small></td><td><button className={`status-button ${expense.active ? 'included' : 'discussing'}`} onClick={() => void setDecision(expense, !expense.active)}>{expense.active ? 'Inclus' : 'À discuter'}</button></td><td><div className="row-actions"><button className="icon-button" onClick={() => edit(expense)} aria-label="Modifier"><Pencil size={17} /></button><button className="icon-button danger" onClick={() => void remove(expense.id)} aria-label="Supprimer"><Trash2 size={17} /></button></div></td></tr>)}</tbody></table></div> : <Empty>Aucun coût ne correspond à ce filtre.</Empty>;
   return <div className="page-stack">
-    <div className="three-columns"><KpiCard icon={WalletCards} label="Solde de départ" value={formatEUR(data.assumptions.cashBalanceCents)} detail="Trésorerie Qonto actuelle" /><KpiCard icon={CircleDollarSign} label="MRR HT utilisé" value={formatEUR(data.assumptions.stripeMrrCents)} detail="Hypothèse mensuelle Stripe hors taxes" tone="good" /><KpiCard icon={Building2} label="Fournisseurs récurrents" value={formatEUR(data.assumptions.recurringQontoCents)} detail="Base mensuelle détectée dans Qonto" /></div>
-    <section className="card budget-calendar"><div className="section-title"><div><h2>Agenda budgétaire sur 12 mois</h2><p>Clique sur un mois pour explorer ses échéances, puis sur une dépense pour la modifier.</p></div><button className={`button ${showCalendarDiscussions ? 'discussion' : 'secondary'}`} onClick={() => setShowCalendarDiscussions((value) => !value)}>{showCalendarDiscussions ? 'Masquer' : 'Afficher'} les coûts à discuter</button></div>
+    <section className="card forecast-command-bar"><div><span className="eyebrow">Projection budgétaire</span><h2>Planifier les prochains coûts</h2><p>Choisis l’horizon, explore les mois et gère toutes les dépenses depuis une liste unique.</p></div><div className="forecast-command-actions"><div className="period-segmented">{([6, 12, 24] as const).map((months) => <button key={months} className={horizon === months ? 'active' : ''} onClick={() => setHorizon(months)}>{months} mois</button>)}</div><button className="button primary" onClick={openNew}><Plus size={17} /> Ajouter un coût</button></div></section>
+    <div className="forecast-summary-grid">
+      <article className="card forecast-summary-item"><span>Trésorerie actuelle</span><strong>{formatEUR(data.assumptions.cashBalanceCents)}</strong><small>Solde Qonto</small></article>
+      <article className="card forecast-summary-item"><span>Revenus mensuels HT</span><strong className="income">{formatEUR(data.assumptions.stripeMrrCents)}</strong><small>MRR Stripe utilisé</small></article>
+      <article className="card forecast-summary-item"><span>Coûts prévus ce mois</span><strong className="expense">{formatEUR(currentMonth?.totalExpensesCents || 0)}</strong><small>Récurrents et futurs inclus</small></article>
+      <article className="card forecast-summary-item"><span>Trésorerie à {horizon} mois</span><strong>{formatEUR(horizonMonth?.projectedBalanceCents || 0)}</strong><small>Projection après dépenses</small></article>
+    </div>
+    <section className="card budget-calendar"><div className="section-title"><div><h2>Agenda budgétaire sur {horizon} mois</h2><p>Clique sur un mois pour explorer ses échéances, puis sur une dépense pour la modifier.</p></div><button className={`button ${showCalendarDiscussions ? 'discussion' : 'secondary'}`} onClick={() => setShowCalendarDiscussions((value) => !value)}>{showCalendarDiscussions ? 'Masquer' : 'Afficher'} les coûts à discuter</button></div>
       <div className="calendar-legend"><span><i className="legend-dot income-dot" /> Revenus HT</span><span><i className="legend-dot expense-dot" /> Dépenses HT</span><span><i className="legend-dot discussion-dot" /> À discuter · hors total</span></div>
       <div className="budget-month-grid">{data.months.map((month) => {
         const costs = calendarCostsFor(month.key);
@@ -341,8 +354,8 @@ const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
         </div>
       </div>
     </section>
-    <section className="card chart-card"><div className="section-title"><div><h2>Prévision à 12 mois</h2><p>Solde projeté = trésorerie + MRR Stripe HT − fournisseurs récurrents − dépenses ajoutées.</p></div></div><ResponsiveContainer width="100%" height={330}><AreaChart data={chart}><defs><linearGradient id="forecastFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#2f765d" stopOpacity={0.35} /><stop offset="95%" stopColor="#2f765d" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="label" /><YAxis tickFormatter={(value) => `${Math.round(value / 100)} €`} /><Tooltip formatter={(value) => formatEUR(Number(value))} /><Area type="monotone" dataKey="balance" name="Trésorerie projetée" stroke="#2f765d" strokeWidth={3} fill="url(#forecastFill)" /><Area type="monotone" dataKey="expenses" name="Dépenses prévues" stroke="#d87a53" fill="transparent" /></AreaChart></ResponsiveContainer></section>
-    <section className="card future-cost-editor"><div className="section-title"><div><h2>{editingId ? 'Modifier le coût futur' : 'Ajouter un coût futur'}</h2><p>Le montant retenu dans toutes les projections est automatiquement converti en hors taxes.</p></div>{editingId && <span className="status connected">Modification en cours</span>}</div>
+    <section className="card"><div className="section-title forecast-costs-header"><div><h2>Coûts futurs</h2><p>{includedExpenses.length} inclus · {discussingExpenses.length} à discuter · tous les montants sont affichés en HT</p></div><div className="cost-filter-tabs">{([['all', 'Tous'], ['included', 'Inclus'], ['discussing', 'À discuter']] as const).map(([value, label]) => <button key={value} className={costFilter === value ? 'active' : ''} onClick={() => setCostFilter(value)}>{label}</button>)}</div></div>{renderCostTable(visibleExpenses)}</section>
+    {showEditor && <div className="forecast-modal-backdrop" role="presentation"><section className="card future-cost-editor forecast-modal" role="dialog" aria-modal="true" aria-label={editingId ? 'Modifier le coût futur' : 'Ajouter un coût futur'}><div className="section-title"><div><h2>{editingId ? 'Modifier le coût futur' : 'Ajouter un coût futur'}</h2><p>Le montant retenu dans toutes les projections est automatiquement converti en hors taxes.</p></div><button className="icon-button" onClick={cancelEdit} aria-label="Fermer"><XCircle size={22} /></button></div>
       <form className="expense-form" onSubmit={submit}>
         <div className="form-grid-3">
           <label>Nom du coût<input required minLength={2} value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder="Ex. Abonnement logiciel CRM" /></label>
@@ -360,12 +373,9 @@ const Forecast = ({ refreshKey, onChanged }: { refreshKey: number; onChanged: ()
         <label>Notes<textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="Contexte, hypothèse ou détail fiscal…" /></label>
         <div className="tax-preview"><span>Montant retenu dans le prévisionnel</span><strong>{formatEUR(previewHtCents)} HT</strong><small>{form.taxMode === 'ttc' ? `Conversion du TTC avec ${form.vatRate || '0'} % de TVA` : form.taxMode === 'reverse_charge' ? 'TVA autoliquidée : coût conservé hors taxes' : form.taxMode === 'no_vat' ? 'Aucune TVA applicable : montant conservé tel quel' : 'Montant déjà saisi hors taxes'}</small></div>
         {formError && <p className="form-error">{formError}</p>}
-        <div className="form-actions"><button className="button primary" disabled={saving}>{saving ? <Loader2 className="spin" size={17} /> : editingId ? <Pencil size={17} /> : <Plus size={17} />}{editingId ? ' Enregistrer les modifications' : ' Ajouter au prévisionnel'}</button>{editingId && <button type="button" className="button secondary" onClick={cancelEdit}><XCircle size={17} /> Annuler</button>}</div>
+        <div className="form-actions"><button className="button primary" disabled={saving}>{saving ? <Loader2 className="spin" size={17} /> : editingId ? <Pencil size={17} /> : <Plus size={17} />}{editingId ? ' Enregistrer les modifications' : ' Ajouter au prévisionnel'}</button><button type="button" className="button secondary" onClick={cancelEdit}><XCircle size={17} /> Annuler</button></div>
       </form>
-    </section>
-    <section className="card"><div className="section-title"><div><h2>Coûts inclus dans le prévisionnel</h2><p>{includedExpenses.length} coût(s) actif(s) · tous les totaux sont affichés en HT</p></div></div>{renderCostTable(includedExpenses, false)}</section>
-    <section className="card discussion-card"><div className="section-title"><div><h2>À discuter avec mon associé</h2><p>{discussingExpenses.length} dépense(s) mise(s) de côté · aucun impact sur le prévisionnel</p></div><span className="status discussing">Hors projection</span></div>{renderCostTable(discussingExpenses, true)}</section>
-    <section className="card"><div className="section-title"><div><h2>Détail mensuel du prévisionnel</h2><p>Les échéances mensuelles, trimestrielles, annuelles et uniques sont séparées.</p></div></div><div className="table-wrap"><table className="forecast-detail-table"><thead><tr><th>Mois</th><th className="amount">Fournisseurs Qonto</th><th className="amount">Mensuelles</th><th className="amount">Trimestrielles</th><th className="amount">Annuelles</th><th className="amount">Uniques</th><th className="amount">Total dépenses</th><th className="amount">MRR Stripe HT</th><th className="amount">Solde projeté</th></tr></thead><tbody>{data.months.map((month) => <tr key={month.key}><td><strong>{month.label}</strong></td><td className="amount">{formatEUR(month.recurringQontoCents)}</td><td className="amount">{formatEUR(month.plannedMonthlyCents)}</td><td className="amount">{formatEUR(month.plannedQuarterlyCents)}</td><td className="amount">{formatEUR(month.plannedYearlyCents)}</td><td className="amount">{formatEUR(month.plannedOneOffCents)}</td><td className="amount expense"><strong>{formatEUR(month.totalExpensesCents)}</strong></td><td className="amount income">{formatEUR(month.stripeMrrCents)}</td><td className="amount"><strong>{formatEUR(month.projectedBalanceCents)}</strong></td></tr>)}</tbody></table></div></section>
+    </section></div>}
   </div>;
 };
 
